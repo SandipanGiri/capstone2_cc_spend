@@ -55,7 +55,7 @@ def _describe_image_with_openai(img_b64: str) -> str:
                 if isinstance(p, dict) and p.get("type") == "text"
             ).strip()
         return str(content).strip()
-    except Exception:
+    except Exception as e:
         return ""
 
 

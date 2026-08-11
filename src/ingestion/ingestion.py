@@ -8,7 +8,6 @@ from src.ingestion.docling_parser import parse_document
 
 load_dotenv()
 
-
 _TEXT_CHUNK_SIZE = 1500
 _TEXT_CHUNK_OVERLAP = 300
 
@@ -71,7 +70,7 @@ if __name__ == "__main__":
         file_path = pathlib.Path("data/KB_Credit_Card_Spend_Summarizer.docx")
 
     if not file_path.exists():
-        raise FileNotFoundError(f"word file not found at: {file_path.resolve()}")
+        raise FileNotFoundError(f"word file was not found at: {file_path.resolve()}")
 
     result = run_ingestion(str(file_path))
     print(f"\nIngestion complete: {result}")
