@@ -1,5 +1,5 @@
 def main():
-    print("Hello from capstone2-cc-spend!")
+    print("Hello from credit-card-spend!")
 
 
 if __name__ == "__main__":
