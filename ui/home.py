@@ -132,7 +132,7 @@ if prompt:
 
             except requests.exceptions.ConnectionError:
                 st.error(
-                    f"Cannot connect to backend at {backend_url}. Is the backend running?"
+                    f"Cannot connect to backend at {BACKEND_URL}. Is the backend running?"
                 )
 
             except requests.exceptions.RequestException as e:
