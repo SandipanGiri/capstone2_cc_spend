@@ -1,5 +1,4 @@
 [project]
-<<<<<<< HEAD
 name = "capstone2-cc-spend"
 version = "0.1.0"
 description = "A credit card spend analyzer and suumarizer"
@@ -7,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "cohere>=7.0.8",
+    "docling>=2.118.0",
     "fastapi>=0.141.1",
+    "guardrail-ai>=0.1.8",
     "langchain-community>=0.4.2",
     "langchain-openai>=1.4.1",
     "langchain-postgres>=0.0.17",
@@ -18,18 +19,4 @@ dependencies = [
     "streamlit>=1.61.1",
     "unstructured[pdf]>=0.25.0",
     "uvicorn>=0.52.1",
-=======
-name = "credit-card-spend"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = [
-    "docling>=2.118.0",
-    "langchain>=1.3.14",
-    "langchain-community>=0.4.2",
-    "langchain-openai>=1.4.1",
-    "langchain-postgres>=0.0.17",
-    "python-dotenv>=1.2.2",
->>>>>>> 5004f1845eec983b5853c9c99efd279018ae16f0
 ]

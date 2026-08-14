@@ -1,4 +1,3 @@
-
 import base64
 import hashlib
 import json
@@ -10,6 +9,7 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from langchain_openai import OpenAIEmbeddings
+from langchain_postgres import PGVector
 
 load_dotenv()
 
@@ -23,6 +23,10 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 _PG_CONNECTION = os.getenv("PG_CONNECTION_STRING", "")
 _PG_DSN = _PG_CONNECTION.replace("postgresql+psycopg://", "postgresql://")
+model = os.getenv("OPENAI_EMBEDDING_MODEL")
+api_key = os.getenv("OPENAI_API_KEY")
+# pg_vector_connection = os.getenv("PG_CONNECTION_STRING")
+pg_rdbms_connection = os.getenv("PG_RDBMS_CONNECTION_STRING")
 
 # ---------------------------------------------------------------------------
 # OpenAI embeddings — module-level singleton.
@@ -86,9 +90,14 @@ def get_db_conn():
     return _get_pool().connection()
 
 
+def get_embeddings():
+    return OpenAIEmbeddings(model=model, api_key=api_key)
+
+
 # ---------------------------------------------------------------------------
 # Document registry
 # ---------------------------------------------------------------------------
+
 
 def upsert_document(filename: str, source_path: str) -> str:
     """Insert a document record and return its UUID.
@@ -118,6 +127,7 @@ def upsert_document(filename: str, source_path: str) -> str:
 # ---------------------------------------------------------------------------
 # Chunk storage
 # ---------------------------------------------------------------------------
+
 
 def store_chunks(chunks: list[dict], doc_id: str) -> int:
     """Embed each chunk and insert it into the multimodal_chunks table.
@@ -163,8 +173,13 @@ def store_chunks(chunks: list[dict], doc_id: str) -> int:
     # Issue 10 fix: Only store fields in JSONB that don't already have a
     # dedicated column — the rest are redundant and waste storage.
     _DEDICATED_COLUMNS = {
-        "content_type", "element_type", "section",
-        "page_number", "source_file", "position", "image_base64",
+        "content_type",
+        "element_type",
+        "section",
+        "page_number",
+        "source_file",
+        "position",
+        "image_base64",
     }
 
     rows_inserted = 0
@@ -199,7 +214,9 @@ def store_chunks(chunks: list[dict], doc_id: str) -> int:
                 embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
                 # Exclude fields that already have dedicated columns from JSONB.
-                clean_meta = {k: v for k, v in meta.items() if k not in _DEDICATED_COLUMNS}
+                clean_meta = {
+                    k: v for k, v in meta.items() if k not in _DEDICATED_COLUMNS
+                }
 
                 cur.execute(
                     """
@@ -217,17 +234,21 @@ def store_chunks(chunks: list[dict], doc_id: str) -> int:
                     """,
                     (
                         doc_id,
-                        chunk["content_type"],       # chunk_type column
-                        meta.get("element_type"),    # raw Docling label
-                        chunk["content"],            # text / markdown / caption
-                        image_path,                  # filesystem path (None for text/table)
+                        chunk["content_type"],  # chunk_type column
+                        meta.get("element_type"),  # raw Docling label
+                        chunk["content"],  # text / markdown / caption
+                        image_path,  # filesystem path (None for text/table)
                         mime_type,
                         meta.get("page_number"),
                         meta.get("section"),
                         meta.get("source_file"),
-                        json.dumps(meta.get("position")) if meta.get("position") else None,
-                        embedding_str,               # ::vector cast
-                        json.dumps(clean_meta),      # JSONB catch-all
+                        (
+                            json.dumps(meta.get("position"))
+                            if meta.get("position")
+                            else None
+                        ),
+                        embedding_str,  # ::vector cast
+                        json.dumps(clean_meta),  # JSONB catch-all
                     ),
                 )
                 rows_inserted += 1
@@ -239,6 +260,7 @@ def store_chunks(chunks: list[dict], doc_id: str) -> int:
 # ---------------------------------------------------------------------------
 # Similarity search
 # ---------------------------------------------------------------------------
+
 
 def similarity_search(
     query: str,
@@ -307,6 +329,7 @@ def similarity_search(
 # Chunk listing (for preview / debugging)
 # ---------------------------------------------------------------------------
 
+
 def get_all_chunks(chunk_type: str | None = None, limit: int = 200) -> list[dict]:
     """Return all stored chunks, optionally filtered by type.
 
@@ -351,6 +374,14 @@ def get_all_chunks(chunk_type: str | None = None, limit: int = 200) -> list[dict
 
     return results
 
-    return results
 
-
+# ----------------
+# get vector store
+# ----------------
+def get_vector_store(collection_name: str = "RerankingRAGVectorStore"):
+    return PGVector(
+        collection_name=collection_name,
+        connection=_PG_CONNECTION,
+        embeddings=get_embeddings(),
+        use_jsonb=True,
+    )
