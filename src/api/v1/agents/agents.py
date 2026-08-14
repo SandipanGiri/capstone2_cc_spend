@@ -25,7 +25,6 @@ from src.api.v1.schemas.query_schema import AIResponse, EvaluationResult
 from src.core.rdbm import get_sql_database
 
 load_dotenv()
-# CHECKPOINT_DB_URI = os.getenv("LANGGRAPH_CHECKPOINT_DB_URI")
 CHECKPOINT_DB_URI = os.getenv("LANGGRAPH_CHECKPOINT_DB_URI")
 checkpoint_cm = PostgresSaver.from_conn_string(CHECKPOINT_DB_URI)
 checkpoint = checkpoint_cm.__enter__()
