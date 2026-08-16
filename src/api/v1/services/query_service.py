@@ -1,4 +1,15 @@
 from src.api.v1.agents.agents import run_search_agent_stream, run_search_agent
+<<<<<<< HEAD
+
+
+# for non streaming response
+def query_documents(query:str,thread_id:str):
+    #query=request["query"]
+    #print(query)
+    #return run_search_agent(query)
+    return run_search_agent(query,thread_id)
+   
+=======
 from src.core.guardrails import guard_input, guard_output
 
 
@@ -11,6 +22,7 @@ def query_documents(query: str, user_id: str):
     if isinstance(result, dict) and result.get("response"):
         result["response"] = guard_output(result["response"])
     return result
+>>>>>>> 20e290de71fef1ec5011fecc1bc0215cb99fd397
 
 
 # method for streaming response

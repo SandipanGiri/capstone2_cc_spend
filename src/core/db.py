@@ -375,6 +375,18 @@ def get_all_chunks(chunk_type: str | None = None, limit: int = 200) -> list[dict
     return results
 
 
+<<<<<<< HEAD
+def get_vector_store():
+    vector_store = PGVector(
+        connection="postgresql://localhost:5432/vectordb",
+        embeddings=embedding_model,
+        collection_name="multimodal_docs"
+    )
+
+    return vector_store
+
+
+=======
 # ----------------
 # get vector store
 # ----------------
@@ -385,3 +397,4 @@ def get_vector_store(collection_name: str = "RerankingRAGVectorStore"):
         embeddings=get_embeddings(),
         use_jsonb=True,
     )
+>>>>>>> 20e290de71fef1ec5011fecc1bc0215cb99fd397

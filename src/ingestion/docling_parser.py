@@ -61,7 +61,7 @@ def _describe_image_with_openai(img_b64: str) -> str:
 
 
 def parse_document(file_path: str) -> list[dict]:
-    """Parse a PDF into a flat list of typed content chunks using Docling.
+    """Parse a word file into a flat list of typed content chunks using Docling.
 
     Each chunk is a dict with three keys:
       content      — text or markdown representation of the element
@@ -73,21 +73,20 @@ def parse_document(file_path: str) -> list[dict]:
     retrieved chunk tells the query layer what kind of content it is
     and where in the document it came from.
     """
-
-
+ 
     pipeline_options = PdfPipelineOptions(
         do_ocr=True,
         do_table_structure=True,
         generate_picture_images=True,
         accelerator_options=AcceleratorOptions(device=AcceleratorDevice.CPU),
-    )
+        )
 
     converter = DocumentConverter(
         allowed_formats=[InputFormat.DOCX],
         format_options={
             InputFormat.DOCX: WordFormatOption(pipeline_options=pipeline_options)
         },
-    )
+       )
 
 
     result = converter.convert(file_path)
