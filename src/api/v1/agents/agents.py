@@ -563,7 +563,7 @@ def run_search_agent(query: str, thread_id: str):
 
     state = rag_graph.get_state({"configurable": {"thread_id": "customer_session01"}})
 
-    print("***************am printingmy state m,essage ", state.values["messages"])
+    # print("***************am printingmy state m,essage ", state.values["messages"])
 
     return final_state["response"]
 
