@@ -14,6 +14,14 @@ def query_documents(query: str, user_id: str):
 
 
 # method for streaming response
-async def query_documents_stream(query: str):
-    # just return async generator
-    return run_search_agent_stream(query)
+async def query_documents_stream(query: str, user_id: str):
+    print(query)
+
+    # input guardrail: toxicity
+    guard_input(query)
+
+    async for chunk in run_search_agent_stream(query, user_id):
+        if isinstance(chunk, dict) and chunk.get("response"):
+            chunk["response"] = guard_output(chunk["response"])
+
+        yield chunk
