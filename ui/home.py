@@ -8,8 +8,26 @@ import re
 # -------------------------
 st.set_page_config(page_title="Credit Card Chatbot", page_icon="🤖", layout="wide")
 
-BACKEND_URL = "http://localhost:8000/chat"
+BACKEND_URL = "http://localhost:8000/api/v1/query"
+# UPLOAD_URL = "http://localhost:8000/api/v1/upload"
+UPLOAD_URL = "http://localhost:8000/api/v1/upload"
 
+
+st.markdown(
+    """
+    <style>
+
+    /* ---------- Global ---------- */
+
+    .stApp {
+        background: #e8f2ef;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+# backgrund color  #f7f8fc
 # -------------------------
 # Sidebar
 # -------------------------
@@ -38,11 +56,27 @@ st.sidebar.markdown("---")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "upload_results" not in st.session_state:
+    st.session_state.upload_results = []
+
+if "is_streaming" not in st.session_state:
+    st.session_state.is_streaming = False
+
+if "reset_uploader" not in st.session_state:
+    st.session_state.reset_uploader = False
+
+# Reset the uploader on the rerun
+if st.session_state.reset_uploader:
+    st.session_state.reset_uploader = False
+    st.rerun()
+
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 # -------------------------
 # Header
 # -------------------------
 
-st.title("🤖 Credit Card RAG Chatbot")
+st.title("💳 Credit Card RAG Chatbot")
 st.caption("Your credit card spend analyzer.")
 
 # -------------------------
@@ -50,7 +84,7 @@ st.caption("Your credit card spend analyzer.")
 # -------------------------
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
+    with st.chat_message(message["role"], avatar= None):
         st.markdown(message["content"])
 
         if message["role"] == "assistant":
@@ -73,10 +107,10 @@ if prompt:
 
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=None):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=None):
 
         placeholder = st.empty()
 
@@ -86,7 +120,8 @@ if prompt:
                 response = requests.post(
                     BACKEND_URL,
                     json={
-                        "question": prompt,
+                        "query": prompt,
+                        "thread_id": "C-1001",
                         # "temperature": temperature,
                         # "top_k": top_k,
                     },
@@ -161,19 +196,118 @@ if prompt:
 # ---------------
 # document upload
 # ---------------
+# uploaded_files = st.sidebar.file_uploader(
+#     "Upload Documents", type=["pdf", "docx"], accept_multiple_files=True
+# )
+
+# if uploaded_files:
+
+#     if st.sidebar.button("Ingest"):
+
+#         # Prepare the file payload for form-data transmission
+#         # files = {"file": (uploaded_files.name, uploaded_files.getvalue())}
+
+#         with st.sidebar.spinner("Ingesting file..."):
+#             try:
+
+#                 for file in uploaded_files:
+
+#                     response = requests.post(
+#                         UPLOAD_URL,
+#                         files={"file": (file.name, file.getvalue())},
+#                     )
+
+#                     # Handle API Exceptions and Successes
+#                     if response.status_code == 201:
+#                         st.sidebar.success("Document(s) uploaded.")
+#                         st.sidebar.json(response.json())
+#                     else:
+#                         error_msg = response.json().get("detail", "File upload failed")
+#                         st.sidebar.error(f"Error {response.status_code}: {error_msg}")
+
+#             except requests.exceptions.ConnectionError:
+#                 st.error("Could not connect to the server. Check server status.")
+#             except Exception as e:
+#                 st.error(f"An unexpected error occurred: {e}")
+
+
+
 uploaded_files = st.sidebar.file_uploader(
-    "Upload Documents", type=["pdf"], accept_multiple_files=True
+    "Upload Documents",
+    type=["pdf", "docx"],
+    accept_multiple_files=True,
+    key=f"document_uploader_{st.session_state.uploader_key}",
 )
 
-if uploaded_files:
 
-    for file in uploaded_files:
+if uploaded_files and st.sidebar.button("Ingest"):
+    successful_files = []
+    failed_files = []
 
-        requests.post(
-            "http://localhost:8000/upload", files={"file": (file.name, file.getvalue())}
+    with st.sidebar.spinner("Ingesting files..."):
+        for file in uploaded_files:
+            try:
+                files = {
+                    "file": (
+                        file.name,
+                        file.getvalue(),
+                        file.type,
+                    )
+                }
+
+                response = requests.post(
+                    UPLOAD_URL,
+                    files=files,
+                    timeout=60,
+                )
+
+                if response.status_code == 201:
+                    successful_files.append(file.name)
+                else:
+                    try:
+                        error_msg = response.json().get(
+                            "detail",
+                            "File upload failed"
+                        )
+                    except ValueError:
+                        error_msg = response.text or "File upload failed"
+
+                    failed_files.append(
+                        f"{file.name}: Error {response.status_code} - {error_msg}"
+                    )
+
+            except requests.exceptions.ConnectionError:
+                failed_files.append(
+                    f"{file.name}: Could not connect to the server."
+                )
+
+            except requests.exceptions.Timeout:
+                failed_files.append(
+                    f"{file.name}: Request timed out."
+                )
+
+            except Exception as e:
+                failed_files.append(
+                    f"{file.name}: {str(e)}"
+                )
+
+    # Display results
+    if successful_files:
+        st.sidebar.success(
+            f"Successfully uploaded {len(successful_files)} file(s)."
         )
 
-    st.sidebar.success("Documents indexed.")
+        for filename in successful_files:
+            st.sidebar.write(f"✅ {filename}")
+
+    if failed_files:
+        st.sidebar.error(
+            f"{len(failed_files)} file(s) failed to upload."
+        )
+
+        for error in failed_files:
+            st.sidebar.write(f"❌ {error}")
+
 
 
 # ---------------
@@ -204,4 +338,5 @@ if uploaded_files:
 
 if st.sidebar.button("🗑 Clear Chat"):
     st.session_state.messages = []
+    st.session_state.uploader_key = 0
     st.rerun()

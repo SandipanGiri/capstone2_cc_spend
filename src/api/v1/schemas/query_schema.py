@@ -1,17 +1,19 @@
 from pydantic import BaseModel, Field
-from typing import Optional,List
+from typing import Optional, List
 
 
 # query api endpoint request format
 class QueryRequest(BaseModel):
     query: str = Field(description="The user's question")
-    thread_id: str =Field(description="The user's sessionid")
+    thread_id: str = Field(description="The user's sessionid")
+
 
 class ImageResult(BaseModel):
     content: str
     source_file: Optional[str] = None
     mime_type: Optional[str] = None
     image_base64: Optional[str] = None
+
 
 class EvaluationResult(BaseModel):
     faithfulness_score: float = Field(
@@ -30,7 +32,7 @@ class EvaluationResult(BaseModel):
 # query api endpoint response format
 class QueryResponse(BaseModel):
     query: str
-    thread_id: str
+    thread_id: str = "user01"
     answer: str
     policy_citations: str
     page_no: str
