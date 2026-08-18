@@ -39,13 +39,6 @@ st.markdown(
 # Sidebar
 # -------------------------
 
-# st.sidebar.title("⚙️ Settings")
-
-# backend_url = st.sidebar.text_input("Backend URL", value="http://localhost:8000/chat")
-
-# temperature = st.sidebar.slider("Temperature", 0.0, 1.0, 0.2, 0.1)
-
-# top_k = st.sidebar.slider("Retrieved Documents", 1, 10, 5)
 
 st.sidebar.markdown("---")
 # st.sidebar.info("""
@@ -419,15 +412,6 @@ if uploaded_files and st.sidebar.button("Ingest"):
 
 #     for idx, source in citations.items():
 #         st.markdown(f"**[{idx}]** {source}")
-
-
-# ---------------
-# save chat
-# ---------------
-
-# save_chat(st.session_state.session_id, st.session_state.messages)
-
-# st.sidebar.write(f"Session: {st.session_state.session_id[:8]}")
 
 if st.sidebar.button("🗑 Clear Chat"):
     st.session_state.messages = []

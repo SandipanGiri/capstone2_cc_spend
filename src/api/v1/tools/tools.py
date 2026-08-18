@@ -133,27 +133,21 @@ def hybrid_search_node(state: RAGState):
 
 #        chunk_type="image"
 
+
 def extract_images_node(state: RAGState):
 
     print("========== INSIDE IMAGE SEARCH NODE ==========")
 
     query = state["query"].lower()
 
-    if any(word in query for word in [
-        "all",
-        "available",
-        "list"
-    ]):
+    if any(word in query for word in ["all", "available", "list"]):
         k = 20
 
     else:
         # retrieve more candidates
         k = 5
 
-    results = similarity_search(
-        query=state["query"],k=k,
-        chunk_type="image"
-    )
+    results = similarity_search(query=state["query"], k=k, chunk_type="image")
 
     images = []
 
@@ -161,14 +155,13 @@ def extract_images_node(state: RAGState):
 
         if result.get("image_base64"):
 
-            images.append({
-                "content": result["image_base64"],
-                "mime_type": result.get("mime_type"),
-                "source_file": result.get("source_file"),
-                "page_number": result.get("page_number")
-            })
+            images.append(
+                {
+                    "content": result["image_base64"],
+                    "mime_type": result.get("mime_type"),
+                    "source_file": result.get("source_file"),
+                    "page_number": result.get("page_number"),
+                }
+            )
 
-    return {
-        **state,
-        "images": images
-    }
+    return {**state, "images": images}

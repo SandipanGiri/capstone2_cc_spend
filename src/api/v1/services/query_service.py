@@ -3,23 +3,23 @@ from src.core.guardrails import guard_input, guard_output
 
 
 # for non streaming response
-def query_documents(query:str,thread_id:str):
-    #query=request["query"]
+def query_documents(query: str, thread_id: str):
+    # query=request["query"]
     print(query)
     try:
         # inout guardrails toxicity
         guard_input(query)
-        #return run_search_agent(query)
-        result= run_search_agent(query,thread_id)
+        # return run_search_agent(query)
+        result = run_search_agent(query, thread_id)
         if isinstance(result, dict) and result.get("answer"):
-        # output guard rail for PII
+            # output guard rail for PII
             result["answer"] = guard_output(result["answer"])
-            print("results readacted",result["answer"])
+            print("results readacted", result["answer"])
         return result
     except Exception as e:
         print(f"Error in query_documents: {e}")
         raise
-   
+
 
 # method for streaming response
 async def query_documents_stream(query: str, thread_id: str):

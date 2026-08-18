@@ -375,7 +375,6 @@ def get_all_chunks(chunk_type: str | None = None, limit: int = 200) -> list[dict
     return results
 
 
-
 # ---------------------------------------------------------------------------
 # Chunk listing (for preview / debugging)
 # ---------------------------------------------------------------------------
