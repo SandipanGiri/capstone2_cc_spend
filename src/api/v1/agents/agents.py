@@ -23,12 +23,14 @@ from src.api.v1.tools.tools import (
 )
 from src.api.v1.schemas.query_schema import AIResponse, EvaluationResult
 from src.core.rdbm import get_sql_database
+import traceback
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 load_dotenv()
-CHECKPOINT_DB_URI = os.getenv("LANGGRAPH_CHECKPOINT_DB_URI")
-checkpoint_cm = PostgresSaver.from_conn_string(CHECKPOINT_DB_URI)
-checkpoint = checkpoint_cm.__enter__()
-checkpoint.setup()
+# CHECKPOINT_DB_URI = os.getenv("LANGGRAPH_CHECKPOINT_DB_URI")
+# checkpoint_cm = AsyncPostgresSaver.from_conn_string(CHECKPOINT_DB_URI)
+# checkpoint = checkpoint_cm.__aenter__()
+# checkpoint.setup()
 
 
 def _get_llm():
@@ -40,6 +42,149 @@ def _get_llm():
 class RouteDecision(BaseModel):
     route: Literal["VECTOR_DB", "HYBRID", "FTS", "RDBMS", "IMAGE"]
     reason: str  # for debugging
+
+
+class IntentDecision(BaseModel):
+    intent: Literal["CHITCHAT", "REPHRASER"]
+    reason: str
+
+
+def intent_check_node(state: RAGState):
+
+    print("========== INSIDE intent_check_node ==========")
+
+    llm = _get_llm()
+
+    structured_llm = llm.with_structured_output(IntentDecision)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                You are an intent classifier.
+
+                Classify the user message into one of two categories.
+
+                CHITCHAT:
+                - hi
+                - hello
+                - hey
+                - good morning
+                - good evening
+                - thanks
+                - thank you
+                - how are you
+                - who are you
+                - casual conversation
+
+                Conversation behavior rules:
+
+                    1. Greeting handling:
+                    - If the user only sends a greeting such as "hi", "hello", "hey", "good morning", or similar:
+                    - Respond politely.
+                    -Politely reject any questions that is asked of out of credit card informations 
+                    - Keep the response brief.
+                    - Ask what the user needs help with.
+
+                    Examples:
+                    User: "Hi"
+                    Assistant: "Hi! How can I help you today?"
+
+                    User: "Good evening"
+                    Assistant: "Good evening! How can I assist you?"
+
+                    2. Normal conversation:
+                    - After the greeting exchange, answer the user's questions normally.
+                    - Do not repeat greeting responses on every message.
+                    - Maintain context from previous messages.
+                    - Provide accurate, useful, and clear answers.
+                    - Ask clarification questions when the user's request is unclear.
+
+
+                REPHRASER:
+                - credit card questions
+                - policy questions
+                - document questions
+                - product questions
+                - transaction questions
+                - any information request
+
+                Return ONLY one exact value:
+                CHITCHAT
+                or
+                REPHRASER
+
+                Do not shorten, modify, or create new values.
+                """,
+            ),
+            (
+                "human",
+                """
+                User message:
+                {query}
+                """,
+            ),
+        ]
+    )
+
+    result = (prompt | structured_llm).invoke({"query": state["query"]})
+
+    print(f"[intent_check_node] Intent: {result.intent}, Reason: {result.reason}")
+
+    return {**state, "intent": result.intent}
+
+
+def chat_response_node(state: RAGState):
+
+    print("========== INSIDE chat_response_node ==========")
+
+    llm = _get_llm()
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                You are a friendly credit card assistant.
+                If a question is outside the scope of credit card assistance politely
+                reject and  state that you can only assist with credit card informations 
+                provdided in context or documents.
+
+                Reply briefly and politely.
+
+
+                Examples:
+
+                User: Hi
+                Assistant: Hi! How can I help you today?
+
+                User: How are you?
+                Assistant: I'm doing great! How can I assist you?
+
+                User: Thanks
+                Assistant: You're welcome!
+                """,
+            ),
+            ("human", "{query}"),
+        ]
+    )
+
+    result = (prompt | llm).invoke({"query": state["query"]})
+
+    response = {
+        "answer": result.content,
+        "policy_citations": "",
+        "page_no": "",
+        "document_name": "",
+    }
+
+    return {
+        **state,
+        "answer": result.content,
+        "response": response,
+        "messages": [AIMessage(content=result.content)],
+    }
 
 
 def add_user_message_node(state: RAGState):
@@ -128,39 +273,16 @@ def router_node(state: RAGState) -> RAGState:
             (
                 "system",
                 """
-                    You are a helpful credit_card assistant  for an Agentic RAG System.
+                    You are a helpful credit_card assistant for an Agentic RAG System.
 
-                     Conversation behavior rules:
-                     
-                                         1. Greeting handling:
-                                         - If the user only sends a greeting such as "hi", "hello", "hey", "good morning", or similar:
-                                         - Respond politely.
-                                         - Keep the response brief.
-                                         - Ask what the user needs help with.
-                     
-                                         Examples:
-                                         User: "Hi"
-                                         Assistant: "Hi! How can I help you today?"
-                     
-                                         User: "Good evening"
-                                         Assistant: "Good evening! How can I assist you?"
-                     
-                                         2. Normal conversation:
-                                         - After the greeting exchange, answer the user's questions normally.
-                                         - Do not repeat greeting responses on every message.
-                                         - Maintain context from previous messages.
-                                         - Provide accurate, useful, and clear answers.
-                                         - Ask clarification questions when the user's request is unclear.
-
-                    -Answer the user's question using only the
+                   -Answer the user's question using only the
                        provided context 
                     -politely reject if any question asked out of scope
                     -don't answer out of this .
 
                     -Classify the user's query into EXACTLY one of the following routes: 
 
-                     
-                      'VECTOR_DB' -  the auery asks about policies, procedures, guides, guidelines,
+                     'VECTOR_DB' -  the auery asks about policies, procedures, guides, guidelines,
                       regulations, or any topic that requires reading text documents 
 
                        'HYBRID' - Use when BOTH semantic understanding AND keyword matching are
@@ -378,30 +500,9 @@ def generate_answer_node(state: RAGState):
                 "system",
                 """
                    You are a helpful credit card assistant. Answer the user's question using only the
-                   provided documents politely reject if any question asked out of scope
+                   provided context politely reject if any question asked out of scope
                    don't answer out of this .
-                  Conversation behavior rules:
-
-                    1. Greeting handling:
-                    - If the user only sends a greeting such as "hi", "hello", "hey", "good morning", or similar:
-                    - Respond politely.
-                    - Keep the response brief.
-                    - Ask what the user needs help with.
-
-                    Examples:
-                    User: "Hi"
-                    Assistant: "Hi! How can I help you today?"
-
-                    User: "Good evening"
-                    Assistant: "Good evening! How can I assist you?"
-
-                    2. Normal conversation:
-                    - After the greeting exchange, answer the user's questions normally.
-                    - Do not repeat greeting responses on every message.
-                    - Maintain context from previous messages.
-                    - Provide accurate, useful, and clear answers.
-                    - Ask clarification questions when the user's request is unclear.
-
+                  
                    Citation rules (fill the structured fields):
                    - document_name: comma-separated list of EVERY source document you used.
                    - page_no: comma-separated page numbers, aligned with the documents above.
@@ -486,9 +587,11 @@ def route(state: RAGState):
     return "RETRY_REQUIRED"
 
 
-def build_rag_graph():
+def build_rag_graph(checkpoint):
     workflow = StateGraph(RAGState)
     workflow.add_node("in_memory", add_user_message_node)
+    workflow.add_node("intent_check", intent_check_node)
+    workflow.add_node("chat_response", chat_response_node)
     workflow.add_node("rephraser", rephraser_node)
     workflow.add_node("router", router_node)
     workflow.add_node("vector_search", vector_search_node)
@@ -501,7 +604,14 @@ def build_rag_graph():
     workflow.add_node("image_search", extract_images_node)
 
     workflow.set_entry_point("in_memory")
-    workflow.add_edge("in_memory", "rephraser")
+    workflow.add_edge("in_memory", "intent_check")
+    workflow.add_conditional_edges(
+        "intent_check",
+        lambda state: state["intent"],
+        {"CHITCHAT": "chat_response", "REPHRASER": "rephraser"},
+    )
+    workflow.add_edge("chat_response", END)
+    # workflow.add_edge("in_memory", "rephraser")
     workflow.add_edge("rephraser", "router")
     workflow.add_conditional_edges(
         "router",
@@ -539,10 +649,10 @@ def build_rag_graph():
     return search_agent
 
 
-rag_graph = build_rag_graph()
+# rag_graph = build_rag_graph(checkpoint)
 
 
-def run_search_agent(query: str, thread_id: str):
+async def run_search_agent(rag_graph, query: str, thread_id: str):
     print("============1. INSIDE run_search_agent ")
     initial_state = {
         "query": query,
@@ -557,7 +667,7 @@ def run_search_agent(query: str, thread_id: str):
     }
     config = {"configurable": {"thread_id": thread_id}}
 
-    final_state = rag_graph.invoke(initial_state, config=config)
+    final_state = await rag_graph.ainvoke(initial_state, config=config)
     if final_state.get("route") == "IMAGE":
         print("FINAL STATE:")
         print(final_state)
@@ -566,7 +676,7 @@ def run_search_agent(query: str, thread_id: str):
         print(final_state.get("images"))
         return {"query": query, "images": final_state.get("images", [])}
 
-    state = rag_graph.get_state({"configurable": {"thread_id": thread_id}})
+    state = await rag_graph.get_state(config)
 
     print("***************am printing my state m,essage ", state.values["messages"])
 
@@ -574,8 +684,14 @@ def run_search_agent(query: str, thread_id: str):
 
 
 # for streaming repsonse:
-async def run_search_agent_stream(query: str, thread_id: str):
-    print("============1. INSIDE run_search_agent ")
+async def run_search_agent_stream(
+    rag_graph,
+    query: str,
+    thread_id: str,
+):
+    
+    print("============ INSIDE run_search_agent_stream")
+
     initial_state = {
         "query": query,
         "retrieved_docs": [],
@@ -586,19 +702,60 @@ async def run_search_agent_stream(query: str, thread_id: str):
         "is_good": False,
         "attempts": 0,
     }
+
     config = {"configurable": {"thread_id": thread_id}}
 
-    async for event in rag_graph.astream_events(
-        initial_state, config=config, version="v1"
-    ):
-        kind = event["event"]
-        print(kind)
+    try:
 
-        # if it is a token generated by the chat model
-        if kind == "on_chat_model_stream":
-            content = event["data"]["chunk"].content
-            if content:
-                # format as an Server Side Event data straem payload
-                yield f"data: {json.dumps({'token': content})}\n\n"
+        async for event in rag_graph.astream_events(
+            initial_state, config=config, version="v2"
+        ):
 
-    yield "data: [DONE]\n\n"
+            kind = event.get("event")
+
+            print("EVENT:", kind)
+            print("DATA:", event.get("data"))
+
+            print(kind)
+
+            # Stream LLM tokens
+            if kind == "on_chat_model_stream":
+
+                node_name = event.get("metadata", {}).get("langgraph_node")
+
+                print("STREAM NODE:", node_name)
+
+                # only stream final answer nodes
+                if node_name not in ["chat_response", "generate_answer"]:
+                    continue
+
+                chunk = event["data"]["chunk"]
+
+                content = chunk.content
+
+                if content:
+
+                    yield content
+
+        # After streaming completes,
+        # get final graph state for metadata
+
+        final_state = await rag_graph.get_state(config)
+
+        state_values = final_state.values
+
+        # send final metadata
+        yield {
+            "done": True,
+            "sources": state_values.get("sources", []),
+            "images": state_values.get("images", []),
+            "policy_citations": state_values.get("policy_citations", ""),
+            "page_no": state_values.get("page_no", ""),
+            "document_name": state_values.get("document_name", ""),
+        }
+
+    except Exception as e:
+        print("Streaming agent error:")
+        traceback.print_exc()
+
+        raise e

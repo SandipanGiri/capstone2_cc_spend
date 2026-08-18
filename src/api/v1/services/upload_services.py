@@ -21,6 +21,5 @@ async def upload_document(file: UploadFile):
     print("*****file ingetsed", result)
     return {
         "message": result["message"],
-        # "filename": file.filename,
         "success": result["status"],
     }
