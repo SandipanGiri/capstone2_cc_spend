@@ -1,5 +1,4 @@
 from src.api.v1.states.rag_state import RAGState
-<<<<<<< HEAD
 from src.core.db import get_db_conn, _embed_texts, similarity_search
 import re
 import psycopg
@@ -20,12 +19,6 @@ def vector_search_node(state: RAGState):
     """
     this function is used to find the similar text using the similarity_Search method
     """
-=======
-from src.core.db import get_vector_store
-
-
-def vector_search_node(state: RAGState):
->>>>>>> 20e290de71fef1ec5011fecc1bc0215cb99fd397
     print("====== INSIDE vector_search_node: searching the vector db")
     vector_store = get_vector_store()
     docs = vector_store.similarity_search(state["query"], k=20)
@@ -36,7 +29,6 @@ def vector_search_node(state: RAGState):
     return {**state, "retrieved_docs": docs}
 
 
-<<<<<<< HEAD
 def fts_search(query: str, k: int = 20):
     print("====== FTS SEARCH ======")
     sql = """
@@ -139,11 +131,44 @@ def hybrid_search_node(state: RAGState):
 #         "image_docs": image_docs,
 #     }
 
+#        chunk_type="image"
 
 def extract_images_node(state: RAGState):
 
-    results = similarity_search(state["query"], k=5)
-    return {"retrieved_docs": results, "images": results}
-=======
-## add the other tools for fts and hybrid search
->>>>>>> 20e290de71fef1ec5011fecc1bc0215cb99fd397
+    print("========== INSIDE IMAGE SEARCH NODE ==========")
+
+    query = state["query"].lower()
+
+    if any(word in query for word in [
+        "all",
+        "available",
+        "list"
+    ]):
+        k = 20
+
+    else:
+        # retrieve more candidates
+        k = 5
+
+    results = similarity_search(
+        query=state["query"],k=k,
+        chunk_type="image"
+    )
+
+    images = []
+
+    for result in results:
+
+        if result.get("image_base64"):
+
+            images.append({
+                "content": result["image_base64"],
+                "mime_type": result.get("mime_type"),
+                "source_file": result.get("source_file"),
+                "page_number": result.get("page_number")
+            })
+
+    return {
+        **state,
+        "images": images
+    }

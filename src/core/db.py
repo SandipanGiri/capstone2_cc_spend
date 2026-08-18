@@ -375,26 +375,52 @@ def get_all_chunks(chunk_type: str | None = None, limit: int = 200) -> list[dict
     return results
 
 
-<<<<<<< HEAD
-def get_vector_store():
-    vector_store = PGVector(
-        connection="postgresql://localhost:5432/vectordb",
-        embeddings=embedding_model,
-        collection_name="multimodal_docs"
-    )
 
-    return vector_store
+# ---------------------------------------------------------------------------
+# Chunk listing (for preview / debugging)
+# ---------------------------------------------------------------------------
 
 
-=======
-# ----------------
-# get vector store
-# ----------------
-def get_vector_store(collection_name: str = "RerankingRAGVectorStore"):
-    return PGVector(
-        collection_name=collection_name,
-        connection=_PG_CONNECTION,
-        embeddings=get_embeddings(),
-        use_jsonb=True,
-    )
->>>>>>> 20e290de71fef1ec5011fecc1bc0215cb99fd397
+def get_all_chunks(chunk_type: str | None = None, limit: int = 200) -> list[dict]:
+    """Return all stored chunks, optionally filtered by type.
+
+    Args:
+        chunk_type: Optional filter — 'text', 'table', or 'image'.
+        limit:      Max rows to return (default 200, safety cap).
+
+    Returns:
+        List of dicts with keys: id, content, chunk_type, page_number,
+        section, source_file, element_type, image_base64, mime_type,
+        position, metadata.
+    """
+    type_clause = "WHERE chunk_type = %(chunk_type)s" if chunk_type else ""
+
+    sql = f"""
+        SELECT
+            id, content, chunk_type, page_number, section,
+            source_file, element_type, image_path, mime_type,
+            position, metadata
+        FROM multimodal_chunks
+        {type_clause}
+        ORDER BY page_number ASC NULLS LAST, id ASC
+        LIMIT %(limit)s
+    """
+
+    with get_db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, {"chunk_type": chunk_type, "limit": limit})
+            rows = cur.fetchall()
+
+    results = []
+    for row in rows:
+        row = dict(row)
+        img_path = row.pop("image_path", None)
+        if img_path and os.path.exists(img_path):
+            row["image_base64"] = base64.b64encode(
+                pathlib.Path(img_path).read_bytes()
+            ).decode()
+        else:
+            row["image_base64"] = None
+        results.append(row)
+
+    return results
