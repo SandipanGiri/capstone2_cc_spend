@@ -3,11 +3,12 @@ import requests
 from datetime import datetime
 import re
 from css import load_styles
-import uuid 
+import uuid
 import base64
 from PIL import Image
-from io import BytesIO  
+from io import BytesIO
 import base64
+import json
 
 # -------------------------
 # Page Configuration
@@ -15,7 +16,7 @@ import base64
 st.set_page_config(page_title="Credit Card Chatbot", layout="wide")
 load_styles()
 
-BACKEND_URL = "http://localhost:8000/api/v1/query"
+BACKEND_URL = "http://localhost:8000/api/v1/query/stream"
 # UPLOAD_URL = "http://localhost:8000/api/v1/upload"
 UPLOAD_URL = "http://localhost:8000/api/v1/upload"
 
@@ -63,7 +64,7 @@ if "is_streaming" not in st.session_state:
     st.session_state.is_streaming = False
 
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid.uuid4())    
+    st.session_state.thread_id = str(uuid.uuid4())
 
 if "reset_uploader" not in st.session_state:
     st.session_state.reset_uploader = False
@@ -93,13 +94,13 @@ for message in st.session_state.messages:
     css_class = "user-msg" if message["role"] == "user" else "assistant-msg"
 
     st.markdown(
-            f"""
+        f"""
             <div class="{css_class}">
                 {message["content"]}
             </div>
             """,
-            unsafe_allow_html=True,
-        )
+        unsafe_allow_html=True,
+    )
 
     if message["role"] == "assistant":
 
@@ -108,13 +109,9 @@ for message in st.session_state.messages:
             try:
                 image_bytes = base64.b64decode(img)
 
-                image_bytes = base64.b64decode(
-                        img["content"]
-                    )
+                image_bytes = base64.b64decode(img["content"])
 
-                st.image(image,
-                    caption=img.get("source_file", "Agent Image")
-                )
+                st.image(image, caption=img.get("source_file", "Agent Image"))
 
             except Exception:
                 print("unable to display the images")
@@ -136,9 +133,7 @@ prompt = st.chat_input("Ask something...")
 
 if prompt:
 
-    st.session_state.messages.append(
-            {"role": "user", "content": prompt}
-    )
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
     st.markdown(
         f"""
@@ -149,116 +144,134 @@ if prompt:
         unsafe_allow_html=True,
     )
 
-    #placeholder = st.empty()
-
+   
     placeholder = st.empty()
 
-    with st.spinner("Thinking..."):
+    full_response = ""
 
-            try:
-                response = requests.post(
-                    BACKEND_URL,
-                    json={
-                        "query": prompt,
-                        "thread_id": st.session_state.thread_id,
-                        # "temperature": temperature,
-                        # "top_k": top_k,
-                    },
-                    timeout=120,
-                )
+    sources = []
 
-                response.raise_for_status()
+    images = []
 
-                data = response.json()
+    try:
 
-                answer = data.get("answer", "No answer returned.")
+        with requests.post(
+            BACKEND_URL,
+            json={
+                "query": prompt,
+                "thread_id": st.session_state.thread_id,
+            },
+            stream=True,
+            timeout=120,
+        ) as response:
 
-                sources = data.get("sources", [])
+            response.raise_for_status()
 
-                # Receive image returned by agent
-                images = data.get("images", [])
+            for chunk in response.iter_lines():
 
-               
-                placeholder.markdown(
-                        f"""
-                        <div class="assistant-msg">
-                            {answer}
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                if not chunk:
+                    continue
 
-                # Display agent returned image
-                # Display agent returned images
-                for img in images:
+                line = chunk.decode("utf-8")
 
-                    try:
+                # SSE data line
+                if line.startswith("data:"):
 
-                        if isinstance(img, dict):
-                            image_data = img.get("content")
-                            caption = img.get("source_file", "Agent Image")
+                    payload = json.loads(line.replace("data:", "").strip())
 
-                        else:
-                            image_data = img
-                            caption = "Agent Image"
+                    # answer token
+                    if "content" in payload:
 
+                        full_response += payload["content"]
 
-                        if image_data:
-
-                            image_bytes = base64.b64decode(image_data)
-
-                            image = Image.open(
-                                BytesIO(image_bytes)
-                            )
-
-                            st.image(
-                                image,
-                                caption=caption,
-                                use_container_width=True
-                            )
-
-
-                    except Exception as e:
-                        st.error(
-                            f"Unable to display image: {e}"
+                        placeholder.markdown(
+                            f"""
+                            <div class="assistant-msg">
+                                {full_response}▌
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
                         )
 
-                if sources:
-                    with st.expander("📚 Retrieved Sources", expanded=False):
+                    # citations + images
+                    if "sources" in payload:
 
-                        for idx, source in enumerate(sources, start=1):
+                        sources = payload["sources"]
 
-                            st.markdown(f"### {idx}. {source.get('title','Document')}")
+                    if "images" in payload:
 
-                            if "score" in source:
-                                st.caption(f"Similarity: {source['score']:.3f}")
+                        images = payload["images"]
 
-                            st.write(source.get("content", ""))
+            # final answer
+            placeholder.markdown(
+                f"""
+                <div class="assistant-msg">
+                    {full_response}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-                            if source.get("metadata"):
+        # save chat memory
 
-                                st.json(source["metadata"])
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": full_response,
+                "sources": sources,
+                "images": images,
+                "time": datetime.now().isoformat(),
+            }
+        )
 
-                            st.markdown("---")
+        # display sources
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                        "sources": sources,
-                        "images": images,
-                        "time": datetime.now().isoformat(),
-                    }
-                )
+        if sources:
 
-            except requests.exceptions.ConnectionError:
-                st.error(
-                    f"Cannot connect to backend at {BACKEND_URL}. Is the backend running?"
-                )
+            with st.expander("📚 Retrieved Sources"):
 
-            except requests.exceptions.RequestException as e:
-                st.error(f"Backend Error:\n\n{e}")
+                for idx, source in enumerate(sources, start=1):
 
+                    st.markdown(f"### {idx}. {source.get('title','Document')}")
+
+                    st.write(source.get("content", ""))
+
+                    st.markdown("---")
+
+        # display images
+
+        for img in images:
+
+            try:
+
+                if isinstance(img, dict):
+
+                    image_data = img.get("content")
+
+                    caption = img.get("source_file", "Agent Image")
+
+                else:
+
+                    image_data = img
+                    caption = "Agent Image"
+
+                image_bytes = base64.b64decode(image_data)
+
+                image = Image.open(BytesIO(image_bytes))
+
+                st.image(image, caption=caption, use_container_width=True)
+
+            except Exception as e:
+
+                st.error(f"Unable to display image: {e}")
+
+    except requests.exceptions.ConnectionError:
+
+        st.error("Cannot connect to backend")
+
+    except requests.exceptions.RequestException as e:
+
+        st.error(f"Backend Error: {e}")
 # ---------------
 # stream answer
 # ---------------
@@ -317,7 +330,6 @@ if prompt:
 #                 st.error(f"An unexpected error occurred: {e}")
 
 
-
 uploaded_files = st.sidebar.file_uploader(
     "Upload Documents",
     type=["pdf", "docx"],
@@ -351,10 +363,7 @@ if uploaded_files and st.sidebar.button("Ingest"):
                     successful_files.append(file.name)
                 else:
                     try:
-                        error_msg = response.json().get(
-                            "detail",
-                            "File upload failed"
-                        )
+                        error_msg = response.json().get("detail", "File upload failed")
                     except ValueError:
                         error_msg = response.text or "File upload failed"
 
@@ -363,37 +372,26 @@ if uploaded_files and st.sidebar.button("Ingest"):
                     )
 
             except requests.exceptions.ConnectionError:
-                failed_files.append(
-                    f"{file.name}: Could not connect to the server."
-                )
+                failed_files.append(f"{file.name}: Could not connect to the server.")
 
             except requests.exceptions.Timeout:
-                failed_files.append(
-                    f"{file.name}: Request timed out."
-                )
+                failed_files.append(f"{file.name}: Request timed out.")
 
             except Exception as e:
-                failed_files.append(
-                    f"{file.name}: {str(e)}"
-                )
+                failed_files.append(f"{file.name}: {str(e)}")
 
     # Display results
     if successful_files:
-        st.sidebar.success(
-            f"Successfully uploaded {len(successful_files)} file(s)."
-        )
+        st.sidebar.success(f"Successfully uploaded {len(successful_files)} file(s).")
 
         for filename in successful_files:
             st.sidebar.write(f"✅ {filename}")
 
     if failed_files:
-        st.sidebar.error(
-            f"{len(failed_files)} file(s) failed to upload."
-        )
+        st.sidebar.error(f"{len(failed_files)} file(s) failed to upload.")
 
         for error in failed_files:
             st.sidebar.write(f"❌ {error}")
-
 
 
 # ---------------

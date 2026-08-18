@@ -56,8 +56,8 @@ except Exception:  # pragma: no cover - import path varies by version
 PII_ENTITIES = [
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
-    "PERSON",
-    #CREDIT_CARD",
+    # "PERSON",
+    # CREDIT_CARD",
     "US_SSN",
     "IBAN_CODE",
     "IP_ADDRESS",
