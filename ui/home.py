@@ -2,11 +2,18 @@ import streamlit as st
 import requests
 from datetime import datetime
 import re
+from css import load_styles
+import uuid 
+import base64
+from PIL import Image
+from io import BytesIO  
+import base64
 
 # -------------------------
 # Page Configuration
 # -------------------------
-st.set_page_config(page_title="Credit Card Chatbot", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Credit Card Chatbot", layout="wide")
+load_styles()
 
 BACKEND_URL = "http://localhost:8000/api/v1/query"
 # UPLOAD_URL = "http://localhost:8000/api/v1/upload"
@@ -32,13 +39,6 @@ st.markdown(
 # Sidebar
 # -------------------------
 
-# st.sidebar.title("⚙️ Settings")
-
-# backend_url = st.sidebar.text_input("Backend URL", value="http://localhost:8000/chat")
-
-# temperature = st.sidebar.slider("Temperature", 0.0, 1.0, 0.2, 0.1)
-
-# top_k = st.sidebar.slider("Retrieved Documents", 1, 10, 5)
 
 st.sidebar.markdown("---")
 # st.sidebar.info("""
@@ -62,6 +62,9 @@ if "upload_results" not in st.session_state:
 if "is_streaming" not in st.session_state:
     st.session_state.is_streaming = False
 
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())    
+
 if "reset_uploader" not in st.session_state:
     st.session_state.reset_uploader = False
 
@@ -76,7 +79,7 @@ if "uploader_key" not in st.session_state:
 # Header
 # -------------------------
 
-st.title("💳 Credit Card RAG Chatbot")
+st.title("💳 Credit Card AI Assistant")
 st.caption("Your credit card spend analyzer.")
 
 # -------------------------
@@ -84,18 +87,46 @@ st.caption("Your credit card spend analyzer.")
 # -------------------------
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"], avatar= None):
-        st.markdown(message["content"])
+    # with st.chat_message(message["role"]):
+    #     st.markdown(message["content"])
 
-        if message["role"] == "assistant":
-            sources = message.get("sources", [])
+    css_class = "user-msg" if message["role"] == "user" else "assistant-msg"
 
-            if sources:
-                with st.expander("📚 Sources"):
-                    for i, src in enumerate(sources, start=1):
-                        st.markdown(f"**{i}. {src.get('title','Document')}**")
-                        st.write(src.get("content", ""))
-                        st.markdown("---")
+    st.markdown(
+            f"""
+            <div class="{css_class}">
+                {message["content"]}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if message["role"] == "assistant":
+
+        for img in message.get("images", []):
+
+            try:
+                image_bytes = base64.b64decode(img)
+
+                image_bytes = base64.b64decode(
+                        img["content"]
+                    )
+
+                st.image(image,
+                    caption=img.get("source_file", "Agent Image")
+                )
+
+            except Exception:
+                print("unable to display the images")
+
+        sources = message.get("sources", [])
+
+        if sources:
+            with st.expander("📚 Sources"):
+                for i, src in enumerate(sources, start=1):
+                    st.markdown(f"**{i}. {src.get('title','Document')}**")
+                    st.write(src.get("content", ""))
+                    st.markdown("---")
 
 # -------------------------
 # Chat Input
@@ -105,23 +136,31 @@ prompt = st.chat_input("Ask something...")
 
 if prompt:
 
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.messages.append(
+            {"role": "user", "content": prompt}
+    )
 
-    with st.chat_message("user", avatar=None):
-        st.markdown(prompt)
+    st.markdown(
+        f"""
+        <div class="user-msg">
+            {prompt}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    with st.chat_message("assistant", avatar=None):
+    #placeholder = st.empty()
 
-        placeholder = st.empty()
+    placeholder = st.empty()
 
-        with st.spinner("Searching knowledge base..."):
+    with st.spinner("Thinking..."):
 
             try:
                 response = requests.post(
                     BACKEND_URL,
                     json={
                         "query": prompt,
-                        "thread_id": "C-1001",
+                        "thread_id": st.session_state.thread_id,
                         # "temperature": temperature,
                         # "top_k": top_k,
                     },
@@ -136,7 +175,53 @@ if prompt:
 
                 sources = data.get("sources", [])
 
-                placeholder.markdown(answer)
+                # Receive image returned by agent
+                images = data.get("images", [])
+
+               
+                placeholder.markdown(
+                        f"""
+                        <div class="assistant-msg">
+                            {answer}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                # Display agent returned image
+                # Display agent returned images
+                for img in images:
+
+                    try:
+
+                        if isinstance(img, dict):
+                            image_data = img.get("content")
+                            caption = img.get("source_file", "Agent Image")
+
+                        else:
+                            image_data = img
+                            caption = "Agent Image"
+
+
+                        if image_data:
+
+                            image_bytes = base64.b64decode(image_data)
+
+                            image = Image.open(
+                                BytesIO(image_bytes)
+                            )
+
+                            st.image(
+                                image,
+                                caption=caption,
+                                use_container_width=True
+                            )
+
+
+                    except Exception as e:
+                        st.error(
+                            f"Unable to display image: {e}"
+                        )
 
                 if sources:
                     with st.expander("📚 Retrieved Sources", expanded=False):
@@ -161,6 +246,7 @@ if prompt:
                         "role": "assistant",
                         "content": answer,
                         "sources": sources,
+                        "images": images,
                         "time": datetime.now().isoformat(),
                     }
                 )
@@ -326,15 +412,6 @@ if uploaded_files and st.sidebar.button("Ingest"):
 
 #     for idx, source in citations.items():
 #         st.markdown(f"**[{idx}]** {source}")
-
-
-# ---------------
-# save chat
-# ---------------
-
-# save_chat(st.session_state.session_id, st.session_state.messages)
-
-# st.sidebar.write(f"Session: {st.session_state.session_id[:8]}")
 
 if st.sidebar.button("🗑 Clear Chat"):
     st.session_state.messages = []

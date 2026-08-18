@@ -57,7 +57,7 @@ PII_ENTITIES = [
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
     "PERSON",
-    "CREDIT_CARD",
+    #CREDIT_CARD",
     "US_SSN",
     "IBAN_CODE",
     "IP_ADDRESS",

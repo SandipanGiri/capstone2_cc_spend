@@ -559,11 +559,16 @@ def run_search_agent(query: str, thread_id: str):
 
     final_state = rag_graph.invoke(initial_state, config=config)
     if final_state.get("route") == "IMAGE":
+        print("FINAL STATE:")
+        print(final_state)
+
+        print("FINAL IMAGES:")
+        print(final_state.get("images"))
         return {"query": query, "images": final_state.get("images", [])}
 
-    state = rag_graph.get_state({"configurable": {"thread_id": "customer_session01"}})
+    state = rag_graph.get_state({"configurable": {"thread_id": thread_id}})
 
-    # print("***************am printingmy state m,essage ", state.values["messages"])
+    print("***************am printing my state m,essage ", state.values["messages"])
 
     return final_state["response"]
 
@@ -578,6 +583,8 @@ async def run_search_agent_stream(query: str, thread_id: str):
         "response": {},
         "images": [],
         "evaluation": {},
+        "is_good": False,
+        "attempts": 0,
     }
     config = {"configurable": {"thread_id": thread_id}}
 

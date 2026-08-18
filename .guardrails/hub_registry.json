@@ -6,7 +6,7 @@
       "exports": [
         "GuardrailsPII"
       ],
-      "installed_at": "2026-08-16T15:13:11.923801+00:00",
+      "installed_at": "2026-08-15T16:32:16.427565+00:00",
       "package_name": "guardrails-ai-guardrails-pii"
     },
     "guardrails/toxic_language": {
@@ -14,7 +14,7 @@
       "exports": [
         "ToxicLanguage"
       ],
-      "installed_at": "2026-08-16T15:15:30.022639+00:00",
+      "installed_at": "2026-08-15T16:34:37.278922+00:00",
       "package_name": "guardrails-ai-toxic-language"
     }
   }
