@@ -1,52 +1,97 @@
-# nodes we want
-# 1. vector_search (top-k=20)
-# 2. rerank
-# 3. generate_answer
 import os
+import traceback
+from contextlib import asynccontextmanager
+from typing import Literal, AsyncIterator
+
 import cohere
-import json
 from dotenv import load_dotenv
+
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.postgres import PostgresSaver
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
+
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
 from pydantic import BaseModel
-from typing import Literal
+
 from src.api.v1.states.rag_state import RAGState
-from langgraph.checkpoint.memory import InMemorySaver
 from src.api.v1.tools.tools import (
     vector_search_node,
     fts_search_node,
     hybrid_search_node,
     extract_images_node,
 )
-from src.api.v1.schemas.query_schema import AIResponse, EvaluationResult
+from src.api.v1.schemas.query_schema import AIResponse
 from src.core.rdbm import get_sql_database
-import traceback
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 load_dotenv()
-# CHECKPOINT_DB_URI = os.getenv("LANGGRAPH_CHECKPOINT_DB_URI")
-# checkpoint_cm = AsyncPostgresSaver.from_conn_string(CHECKPOINT_DB_URI)
-# checkpoint = checkpoint_cm.__aenter__()
-# checkpoint.setup()
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
+CHECKPOINT_DB_URI = os.getenv("LANGGRAPH_CHECKPOINT_DB_URI")
+
+if not CHECKPOINT_DB_URI:
+    raise RuntimeError(
+        "LANGGRAPH_CHECKPOINT_DB_URI environment variable is not configured."
+    )
+
+
+# ============================================================
+# LLM
+# ============================================================
 
 
 def _get_llm():
     return ChatOpenAI(
-        model=os.getenv("OPENAI_CHAT_MODEL"), api_key=os.getenv("OPENAI_API_KEY")
+        model=os.getenv("OPENAI_CHAT_MODEL"),
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 
+# ============================================================
+# STRUCTURED OUTPUT MODELS
+# ============================================================
+
+
 class RouteDecision(BaseModel):
-    route: Literal["VECTOR_DB", "HYBRID", "FTS", "RDBMS", "IMAGE"]
-    reason: str  # for debugging
+    route: Literal[
+        "VECTOR_DB",
+        "HYBRID",
+        "FTS",
+        "RDBMS",
+        "IMAGE",
+    ]
+    reason: str
 
 
 class IntentDecision(BaseModel):
-    intent: Literal["CHITCHAT", "REPHRASER"]
+    intent: Literal[
+        "CHITCHAT",
+        "REPHRASER",
+    ]
     reason: str
+
+
+# ============================================================
+# NODE 1 - ADD USER MESSAGE
+# ============================================================
+
+
+def add_user_message_node(state: RAGState):
+
+    return {
+        **state,
+        "messages": state.get("messages", []) + [HumanMessage(content=state["query"])],
+    }
+
+
+# ============================================================
+# NODE 2 - INTENT CHECK
+# ============================================================
 
 
 def intent_check_node(state: RAGState):
@@ -80,27 +125,31 @@ def intent_check_node(state: RAGState):
 
                 Conversation behavior rules:
 
-                    1. Greeting handling:
-                    - If the user only sends a greeting such as "hi", "hello", "hey", "good morning", or similar:
-                    - Respond politely.
-                    -Politely reject any questions that is asked of out of credit card informations 
-                    - Keep the response brief.
-                    - Ask what the user needs help with.
+                1. Greeting handling:
+                - If the user only sends a greeting such as
+                  "hi", "hello", "hey", "good morning", or similar:
+                - Respond politely.
+                - Politely reject any questions that are outside
+                  credit card information.
+                - Keep the response brief.
+                - Ask what the user needs help with.
 
-                    Examples:
-                    User: "Hi"
-                    Assistant: "Hi! How can I help you today?"
+                Examples:
 
-                    User: "Good evening"
-                    Assistant: "Good evening! How can I assist you?"
+                User: "Hi"
+                Assistant: "Hi! How can I help you today?"
 
-                    2. Normal conversation:
-                    - After the greeting exchange, answer the user's questions normally.
-                    - Do not repeat greeting responses on every message.
-                    - Maintain context from previous messages.
-                    - Provide accurate, useful, and clear answers.
-                    - Ask clarification questions when the user's request is unclear.
+                User: "Good evening"
+                Assistant: "Good evening! How can I assist you?"
 
+                2. Normal conversation:
+                - After the greeting exchange, answer the user's
+                  questions normally.
+                - Do not repeat greeting responses on every message.
+                - Maintain context from previous messages.
+                - Provide accurate, useful, and clear answers.
+                - Ask clarification questions when the user's request
+                  is unclear.
 
                 REPHRASER:
                 - credit card questions
@@ -130,9 +179,19 @@ def intent_check_node(state: RAGState):
 
     result = (prompt | structured_llm).invoke({"query": state["query"]})
 
-    print(f"[intent_check_node] Intent: {result.intent}, Reason: {result.reason}")
+    print(
+        f"[intent_check_node] " f"Intent: {result.intent}, " f"Reason: {result.reason}"
+    )
 
-    return {**state, "intent": result.intent}
+    return {
+        **state,
+        "intent": result.intent,
+    }
+
+
+# ============================================================
+# NODE 3 - CHAT RESPONSE
+# ============================================================
 
 
 def chat_response_node(state: RAGState):
@@ -147,12 +206,13 @@ def chat_response_node(state: RAGState):
                 "system",
                 """
                 You are a friendly credit card assistant.
-                If a question is outside the scope of credit card assistance politely
-                reject and  state that you can only assist with credit card informations 
-                provdided in context or documents.
+
+                If a question is outside the scope of credit card
+                assistance, politely reject it and state that you
+                can only assist with credit card information
+                provided in context or documents.
 
                 Reply briefly and politely.
-
 
                 Examples:
 
@@ -183,23 +243,16 @@ def chat_response_node(state: RAGState):
         **state,
         "answer": result.content,
         "response": response,
-        "messages": [AIMessage(content=result.content)],
+        "messages": state.get("messages", []) + [AIMessage(content=result.content)],
     }
 
 
-def add_user_message_node(state: RAGState):
-
-    return {
-        **state,
-        "messages": state.get("messages", []) + [HumanMessage(content=state["query"])],
-    }
+# ============================================================
+# NODE 4 - REPHRASER
+# ============================================================
 
 
 def rephraser_node(state: RAGState) -> RAGState:
-    """
-    Rephrase the current user query using previous conversation
-    so that it becomes a standalone query suitable for retrieval.
-    """
 
     print("========== INSIDE rephraser_node ==========")
 
@@ -213,9 +266,11 @@ def rephraser_node(state: RAGState) -> RAGState:
                 You are a query rephraser for a RAG system.
 
                 Your job is to rephrase the current user question
-                into a standalone question using the previous conversation.
+                into a standalone question using the previous
+                conversation.
 
                 Rules:
+
                 1. Preserve the user's original intent.
                 2. Resolve references such as:
                    - it
@@ -253,7 +308,12 @@ def rephraser_node(state: RAGState) -> RAGState:
 
     chain = prompt | llm
 
-    result = chain.invoke({"history": history, "query": state["query"]})
+    result = chain.invoke(
+        {
+            "history": history,
+            "query": state["query"],
+        }
+    )
 
     rephrased_query = result.content.strip()
 
@@ -261,11 +321,23 @@ def rephraser_node(state: RAGState) -> RAGState:
 
     print(f"[Rephraser] Rephrased: {rephrased_query}")
 
-    return {**state, "query": rephrased_query}
+    return {
+        **state,
+        "query": rephrased_query,
+    }
+
+
+# ============================================================
+# NODE 5 - ROUTER
+# ============================================================
 
 
 def router_node(state: RAGState) -> RAGState:
+
+    print("========== INSIDE router_node ==========")
+
     llm = _get_llm()
+
     structured_llm = llm.with_structured_output(RouteDecision)
 
     prompt = ChatPromptTemplate.from_messages(
@@ -273,176 +345,276 @@ def router_node(state: RAGState) -> RAGState:
             (
                 "system",
                 """
-                    You are a helpful credit_card assistant for an Agentic RAG System.
+                You are a helpful credit card assistant for an
+                Agentic RAG System.
 
-                   -Answer the user's question using only the
-                       provided context 
-                    -politely reject if any question asked out of scope
-                    -don't answer out of this .
+                Answer the user's question using only the
+                provided context.
 
-                    -Classify the user's query into EXACTLY one of the following routes: 
+                Politely reject questions that are out of scope.
 
-                     'VECTOR_DB' -  the auery asks about policies, procedures, guides, guidelines,
-                      regulations, or any topic that requires reading text documents 
+                Classify the user's query into EXACTLY one of
+                the following routes:
 
-                       'HYBRID' - Use when BOTH semantic understanding AND keyword matching are
-                            important.
+                VECTOR_DB:
+                The query asks about policies, procedures,
+                guides, guidelines, regulations, or any topic
+                that requires reading text documents.
 
-                            Use HYBRID when:
-                            - the query contains important keywords AND
-                            - the query also requires understanding the meaning/context of those
-                            keywords.
+                HYBRID:
+                Use when BOTH semantic understanding AND
+                keyword matching are important.
 
-                       'FTS' -
-                        Use when the query contains specific keywords, names, phrases,
-                        document terms, identifiers, or exact text that should be matched
-                        lexically. 
+                Use HYBRID when:
+                - the query contains important keywords AND
+                - the query also requires understanding the
+                  meaning/context of those keywords.
 
-                      'RDBMS' - the query asks about products, product prices, stock/inventory,
-                      product categories, customer orders, order items, or anything answerable
-                      from a structrured e-commerce database tables:
-                      products, categories, orders, order_items
+                FTS:
+                Use when the query contains specific keywords,
+                names, phrases, document terms, identifiers,
+                or exact text that should be matched lexically.
 
-                      'IMAGE':
-                        - User requests images, pictures, photos, diagrams, visual assets
+                RDBMS:
+                The query asks about products, product prices,
+                stock/inventory, product categories, customer
+                orders, order items, or anything answerable
+                from structured database tables:
+                products, categories, orders, order_items.
 
-                     Reply with the route and one sentence of reason.
-                   """,
+                IMAGE:
+                User requests images, pictures, photos,
+                diagrams, or visual assets.
+
+                Reply with the route and one sentence of reason.
+                """,
             ),
             (
                 "human",
                 """
-                   Question:
-                   {query}
+                Question:
+                {query}
                 """,
             ),
         ]
     )
 
     chain = prompt | structured_llm
-    decision = chain.invoke({"query": state["query"]})
-    print(f"[router_node's decision]: {decision.route} and reason: {decision.reason}")
 
-    return {**state, "route": decision.route}
+    decision = chain.invoke({"query": state["query"]})
+
+    print(
+        f"[router_node's decision]: "
+        f"{decision.route} "
+        f"and reason: {decision.reason}"
+    )
+
+    return {
+        **state,
+        "route": decision.route,
+    }
+
+
+# ============================================================
+# NODE 6 - NL2SQL
+# ============================================================
 
 
 def nl2sql_node(state: RAGState) -> RAGState:
+
     print("About to generate nl2sql")
-    # connect to LLM
+
     llm = _get_llm()
-    # connect to rdbms
+
     db = get_sql_database()
-    # get the tables' live schema
+
     schema_info = db.get_table_info()
-    # write the system prompt and pass on the schema to get only sql query
+
     sql_prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 """
-                   You are a PostgreSQL expert. Given the database schema below,
-                   write a single valid SELECT query that answers the user's question.
+                You are a PostgreSQL expert.
 
+                Given the database schema below, write a single
+                valid SELECT query that answers the user's question.
 
-                   Rules:
-                   - Return ONLY the raw SQL — no explanation, no summary, no markdown fences, no backticks.
-                   - Use only the tables and columns present in the schema.
-                   - Do NOT generate INSERT, UPDATE, DELETE, DROP, or any DML/DDL statements.
-                   - Always add a LIMIT clause (max 50 rows) unless the question asks for aggregates.
-                   - For product or text searches: NEVER search for the full multi-word phrase as one
-                       ILIKE pattern. Instead, split the search into individual meaningful keywords
-                       and OR them together across both name and description columns.
-                       Example — user asks "wireless headset":
-                           WHERE (name ILIKE '%wireless%' OR description ILIKE '%wireless%')
-                           OR (name ILIKE '%headset%'  OR description ILIKE '%headset%')
-                           OR (name ILIKE '%headphones%' OR description ILIKE '%headphones%')
-                       Use your knowledge of synonyms (headset/headphones, laptop/notebook, etc.)
-                       to cast a wider net when the exact term may not match.
-                  
-                   Database schema:
-                   {schema}
-               """,
+                Rules:
+
+                - Return ONLY the raw SQL.
+                - No explanation.
+                - No summary.
+                - No markdown fences.
+                - No backticks.
+                - Use only tables and columns present in the schema.
+                - Do NOT generate INSERT, UPDATE, DELETE, DROP,
+                  or any DML/DDL statements.
+                - Always add a LIMIT clause (max 50 rows) unless
+                  the question asks for aggregates.
+
+                For product or text searches:
+
+                NEVER search for the full multi-word phrase as
+                one ILIKE pattern.
+
+                Instead, split the search into individual
+                meaningful keywords and OR them together across
+                both name and description columns.
+
+                Example:
+
+                User asks:
+                "wireless headset"
+
+                Use:
+
+                WHERE
+                    (name ILIKE '%wireless%'
+                     OR description ILIKE '%wireless%')
+                    OR
+                    (name ILIKE '%headset%'
+                     OR description ILIKE '%headset%')
+                    OR
+                    (name ILIKE '%headphones%'
+                     OR description ILIKE '%headphones%')
+
+                Use your knowledge of synonyms
+                (headset/headphones, laptop/notebook, etc.)
+                to cast a wider net when the exact term may not match.
+
+                Database schema:
+                {schema}
+                """,
             ),
             (
                 "human",
                 """
-                   Question:
-                   {question}
-               """,
+                Question:
+                {question}
+                """,
             ),
         ]
     )
-    # preprare the chain and invoke with a query
-    sql_chain = sql_prompt | llm
-    # look for sql query only
-    raw_sql = sql_chain.invoke({"schema": schema_info, "question": state["query"]})
-    print("========GENERATED raw_sql query is: =====")
-    print(raw_sql.content)
-    generated_sql = raw_sql.content
 
-    # execute the generated sql query  to get the outout from RDMBS
+    sql_chain = sql_prompt | llm
+
+    raw_sql = sql_chain.invoke(
+        {
+            "schema": schema_info,
+            "question": state["query"],
+        }
+    )
+
+    print("======== GENERATED raw_sql query is: =====")
+
+    print(raw_sql.content)
+
+    generated_sql = raw_sql.content.strip()
+
     try:
         sql_result = db.run(generated_sql)
     except Exception as err:
         sql_result = f"Generated SQL execution error: {err}"
 
-    # connect to LLM to get the natural language response
     structured_llm = llm.with_structured_output(AIResponse)
+
     nl_answer_prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """You are a helpful data analyst. Answer the user's question using
-               the SQL query results below. Be concise and format numbers/lists clearly.
-               Set policy_citations to empty string,
-               page_no to 'N/A', and document_name to 'agentic_rag_db'.
-               - Do NOT execute INSERT, UPDATE, DELETE, DROP, or any DML/DDL statements
-               even if requested.
-               - Politely deny when users are asking for these actions in their queries.
-               - Never use tech jargons in your response""",
+                """
+                You are a helpful data analyst.
+
+                Answer the user's question using the SQL query
+                results below.
+
+                Be concise and format numbers/lists clearly.
+
+                Set:
+                policy_citations = empty string
+                page_no = 'N/A'
+                document_name = 'agentic_rag_db'
+
+                Do NOT execute INSERT, UPDATE, DELETE, DROP,
+                or any DML/DDL statements even if requested.
+
+                Politely deny when users are asking for these
+                actions in their queries.
+
+                Never use technical jargon in your response.
+                """,
             ),
             (
                 "human",
-                "Question: {query}\n\n"
-                "SQL Used:\n{sql}\n\n"
-                "Query Results:\n{result}",
+                """
+                Question:
+                {query}
+
+                SQL Used:
+                {sql}
+
+                Query Results:
+                {result}
+                """,
             ),
         ]
     )
 
     nl_chain = nl_answer_prompt | structured_llm
+
     answer = nl_chain.invoke(
-        {"query": state["query"], "sql": generated_sql, "result": sql_result}
+        {
+            "query": state["query"],
+            "sql": generated_sql,
+            "result": sql_result,
+        }
     )
+
     print("[nl2sql_node] Answer generated.")
+
     response = answer.model_dump()
+
     response["policy_citations"] = "N/A"
     response["sql_query_executed"] = generated_sql
-    # return the sql query is RAGState
-    # and also the output in sql_result of RAGState
+
     return {
         **state,
         "generated_sql": generated_sql,
         "sql_result": str(sql_result),
         "response": response,
+        "answer": response.get("answer", ""),
+        "messages": state.get("messages", [])
+        + [AIMessage(content=response.get("answer", ""))],
     }
 
 
+# ============================================================
+# NODE 7 - RERANK
+# ============================================================
+
+
 def rerank_node(state: RAGState):
-    # establish connection with the cohere reranking model
+
     co = cohere.ClientV2(api_key=os.getenv("COHERE_API_KEY"))
-    # send the query and the retrieved_docs to the reranking model
 
-    docs = state["retrieved_docs"]
+    docs = state.get("retrieved_docs", [])
 
-    print("=======3. INSIDE rerank_node. Before calling reranker =========")
+    print("=======3. INSIDE rerank_node. " "Before calling reranker =========")
 
-    print("Retrieved docs count:", len(docs))
+    print(
+        "Retrieved docs count:",
+        len(docs),
+    )
 
     if not docs:
+
         print("No documents found. Skipping reranking.")
 
-        return {**state, "reranked_docs": []}
+        return {
+            **state,
+            "reranked_docs": [],
+        }
 
     rerank_response = co.rerank(
         model="rerank-v3.5",
@@ -451,168 +623,345 @@ def rerank_node(state: RAGState):
         top_n=5,
     )
 
-    # Map Cohere result indices back to LangChain Document objects
     reranked_docs = [docs[r.index] for r in rerank_response.results]
 
-    print(f"[rerank_node] Top {len(reranked_docs)} chunks after reranking:")
+    print(f"[rerank_node] " f"Top {len(reranked_docs)} chunks after reranking:")
+
     for i, r in enumerate(rerank_response.results):
         print(
-            f"  Rank {i+1} | Cohere score: {r.relevance_score:.4f} | original index: {r.index}"
+            f"  Rank {i + 1} | "
+            f"Cohere score: {r.relevance_score:.4f} | "
+            f"original index: {r.index}"
         )
 
-    return {**state, "reranked_docs": reranked_docs}
+    return {
+        **state,
+        "reranked_docs": reranked_docs,
+    }
+
+
+# ============================================================
+# NODE 8 - GENERATE ANSWER
+# ============================================================
 
 
 def generate_answer_node(state: RAGState):
-    if not state["reranked_docs"]:
+
+    reranked_docs = state.get(
+        "reranked_docs",
+        [],
+    )
+
+    if not reranked_docs:
+
+        answer = "I could not find relevant information."
 
         return {
             **state,
+            "answer": answer,
             "response": {
-                "answer": "I could not find relevant information.",
+                "answer": answer,
                 "policy_citations": "",
                 "page_no": "",
                 "document_name": "",
             },
+            "messages": state.get("messages", []) + [AIMessage(content=answer)],
         }
 
     llm = _get_llm()
+
     structured_llm = llm.with_structured_output(AIResponse)
 
     print("=========4. INSIDE GENERATE ANSWER NODE==========")
 
-    for doc in state["reranked_docs"]:
-        print("Metadata: ", doc.metadata)
+    for doc in reranked_docs:
+        print(
+            "Metadata: ",
+            doc.metadata,
+        )
 
-    # let's prepare the context
     context = "\n\n".join(
         [
-            f"[Source: {doc.metadata.get('source', 'unknown')} | Page: {doc.metadata.get('page', -1) + 1 if doc.metadata.get('page') is not None else '?'}]\n{doc.page_content}"
-            for doc in state["reranked_docs"]
+            (
+                f"[Source: "
+                f"{doc.metadata.get('source', 'unknown')} "
+                f"| Page: "
+                f"{doc.metadata.get('page', -1) + 1 if doc.metadata.get('page') is not None else '?'}]"
+                f"\n{doc.page_content}"
+            )
+            for doc in reranked_docs
         ]
     )
+
     history = "\n".join(
         [f"{msg.type}: {msg.content}" for msg in state.get("messages", [])]
     )
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 """
-                   You are a helpful credit card assistant. Answer the user's question using only the
-                   provided context politely reject if any question asked out of scope
-                   don't answer out of this .
-                  
-                   Citation rules (fill the structured fields):
-                   - document_name: comma-separated list of EVERY source document you used.
-                   - page_no: comma-separated page numbers, aligned with the documents above.
-                   - policy_citations: a readable citation combining each document and its page
-                   (e.g.  KB_Credit_Card_Spend_Summarizer.docx, Page 1").
-                   - Always cite ALL versions you drew the answer from, not just one.
-           """,
+                You are a helpful credit card assistant.
+
+                Answer the user's question using only the
+                provided context.
+
+                Politely reject questions that are out of scope.
+
+                Citation rules:
+
+                - document_name:
+                  comma-separated list of EVERY source
+                  document you used.
+
+                - page_no:
+                  comma-separated page numbers aligned
+                  with the documents above.
+
+                - policy_citations:
+                  a readable citation combining each
+                  document and its page.
+
+                Example:
+                KB_Credit_Card_Spend_Summarizer.docx, Page 1
+
+                Always cite ALL versions you drew the answer from,
+                not just one.
+                """,
             ),
             (
                 "human",
                 """
+                Conversation history:
+                {history}
 
-                  Conversation history:
-                    {history}
-                    
-                   Context:
-                   {context}
+                Context:
+                {context}
 
-
-                   Question:
-                   {query}
-               """,
+                Question:
+                {query}
+                """,
             ),
         ]
     )
 
     chain = prompt | structured_llm
-    result = chain.invoke(
-        {"history": history, "context": context, "query": state["query"]}
-    )
 
-    # print(f"[generate_answer_node] Answer generated.")
-    # return {**state, "response": result.model_dump(),"messages":
-    #         [AIMessage(content=result.answer)]}
+    result = chain.invoke(
+        {
+            "history": history,
+            "context": context,
+            "query": state["query"],
+        }
+    )
 
     return {
         **state,
         "context": context,
         "answer": result.answer,
         "response": result.model_dump(),
-        "messages": [AIMessage(content=result.answer)],
+        "messages": state.get("messages", []) + [AIMessage(content=result.answer)],
     }
 
 
+# ============================================================
+# NODE 9 - EVALUATION
+# ============================================================
+
+
 def evaluation_node(state: RAGState) -> RAGState:
+
     print("-------- Evaluating Answer ----------")
+
     history = "\n".join(
         [f"{msg.type}: {msg.content}" for msg in state.get("messages", [])]
     )
+
     llm = _get_llm()
 
     prompt = f"""
-           User Preferences: {history}
+    User Preferences:
+    {history}
 
+    Question:
+    {state["query"].lower()}
 
-           Question: {state['query'].lower()}
+    Context:
+    {state.get("context", "")}
 
+    Answer:
+    {state.get("answer", "")}
 
-           Context:  {state.get('context','')} 
+    Is the answer correct and complete based on the context?
 
+    Respond with only:
+    yes
+    or
+    no
+    """
 
-           Answer: {state.get('answer','')}
+    result = llm.invoke(prompt).content.strip().lower()
 
-  
-           Is the answer is correct and complete based on the context?
-           Respond with only: yes or no
-        """
+    attempts = (
+        state.get(
+            "attempts",
+            0,
+        )
+        + 1
+    )
 
-    result = llm.invoke(prompt).content.strip()
-    attempts = state.get("attempts", 0) + 1
     print("========== EVALUATION RESULT ==========")
+
     print(result)
-    print("Attempt:", attempts)
+
+    print(
+        "Attempt:",
+        attempts,
+    )
+
     print("========================================")
-    return {**state, "is_good": result == "yes", "attempts": attempts}
+
+    return {
+        **state,
+        "is_good": result == "yes",
+        "attempts": attempts,
+    }
+
+
+# ============================================================
+# EVALUATION ROUTER
+# ============================================================
 
 
 def route(state: RAGState):
-    if state["is_good"] or state["attempts"] >= 3:
+
+    if state.get("is_good") or state.get("attempts", 0) >= 3:
         return "NO_RETRY_REQUIRED"
 
     return "RETRY_REQUIRED"
 
 
+# ============================================================
+# BUILD GRAPH
+# ============================================================
+
+
 def build_rag_graph(checkpoint):
+
     workflow = StateGraph(RAGState)
-    workflow.add_node("in_memory", add_user_message_node)
-    workflow.add_node("intent_check", intent_check_node)
-    workflow.add_node("chat_response", chat_response_node)
-    workflow.add_node("rephraser", rephraser_node)
-    workflow.add_node("router", router_node)
-    workflow.add_node("vector_search", vector_search_node)
-    workflow.add_node("hybrid_search", hybrid_search_node)
-    workflow.add_node("fts", fts_search_node)
-    workflow.add_node("nl2sql", nl2sql_node)
-    workflow.add_node("rerank", rerank_node)
-    workflow.add_node("generate_answer", generate_answer_node)
-    workflow.add_node("evaluation", evaluation_node)
-    workflow.add_node("image_search", extract_images_node)
+
+    # --------------------------------------------------------
+    # Nodes
+    # --------------------------------------------------------
+
+    workflow.add_node(
+        "in_memory",
+        add_user_message_node,
+    )
+
+    workflow.add_node(
+        "intent_check",
+        intent_check_node,
+    )
+
+    workflow.add_node(
+        "chat_response",
+        chat_response_node,
+    )
+
+    workflow.add_node(
+        "rephraser",
+        rephraser_node,
+    )
+
+    workflow.add_node(
+        "router",
+        router_node,
+    )
+
+    workflow.add_node(
+        "vector_search",
+        vector_search_node,
+    )
+
+    workflow.add_node(
+        "hybrid_search",
+        hybrid_search_node,
+    )
+
+    workflow.add_node(
+        "fts",
+        fts_search_node,
+    )
+
+    workflow.add_node(
+        "nl2sql",
+        nl2sql_node,
+    )
+
+    workflow.add_node(
+        "rerank",
+        rerank_node,
+    )
+
+    workflow.add_node(
+        "generate_answer",
+        generate_answer_node,
+    )
+
+    workflow.add_node(
+        "evaluation",
+        evaluation_node,
+    )
+
+    workflow.add_node(
+        "image_search",
+        extract_images_node,
+    )
+
+    # --------------------------------------------------------
+    # Entry
+    # --------------------------------------------------------
 
     workflow.set_entry_point("in_memory")
-    workflow.add_edge("in_memory", "intent_check")
+
+    # --------------------------------------------------------
+    # Intent
+    # --------------------------------------------------------
+
+    workflow.add_edge(
+        "in_memory",
+        "intent_check",
+    )
+
     workflow.add_conditional_edges(
         "intent_check",
         lambda state: state["intent"],
-        {"CHITCHAT": "chat_response", "REPHRASER": "rephraser"},
+        {
+            "CHITCHAT": "chat_response",
+            "REPHRASER": "rephraser",
+        },
     )
-    workflow.add_edge("chat_response", END)
-    # workflow.add_edge("in_memory", "rephraser")
-    workflow.add_edge("rephraser", "router")
+
+    workflow.add_edge(
+        "chat_response",
+        END,
+    )
+
+    # --------------------------------------------------------
+    # Rephrase -> Router
+    # --------------------------------------------------------
+
+    workflow.add_edge(
+        "rephraser",
+        "router",
+    )
+
+    # --------------------------------------------------------
+    # Router
+    # --------------------------------------------------------
+
     workflow.add_conditional_edges(
         "router",
         lambda state: state["route"],
@@ -624,39 +973,141 @@ def build_rag_graph(checkpoint):
             "IMAGE": "image_search",
         },
     )
-    # Tools -> Rerank
 
-    workflow.add_edge("vector_search", "rerank")
-    workflow.add_edge("fts", "rerank")
-    workflow.add_edge("hybrid_search", "rerank")
-    workflow.add_edge("rerank", "generate_answer")
-    workflow.add_edge("generate_answer", "evaluation")
-    workflow.add_conditional_edges(
-        "evaluation", route, {"RETRY_REQUIRED": "router", "NO_RETRY_REQUIRED": END}
+    # --------------------------------------------------------
+    # Retrieval -> Rerank
+    # --------------------------------------------------------
+
+    workflow.add_edge(
+        "vector_search",
+        "rerank",
     )
-    workflow.add_edge("evaluation", END)
-    workflow.add_edge("image_search", END)
 
-    # checkpoint = InMemorySaver()
-    # search_agent = workflow.compile(checkpointer=checkpoint)
-    # workflow = build_rag_graph()
+    workflow.add_edge(
+        "fts",
+        "rerank",
+    )
+
+    workflow.add_edge(
+        "hybrid_search",
+        "rerank",
+    )
+
+    # --------------------------------------------------------
+    # Rerank -> Generate
+    # --------------------------------------------------------
+
+    workflow.add_edge(
+        "rerank",
+        "generate_answer",
+    )
+
+    # --------------------------------------------------------
+    # Generate -> Evaluation
+    # --------------------------------------------------------
+
+    workflow.add_edge(
+        "generate_answer",
+        "evaluation",
+    )
+
+    # --------------------------------------------------------
+    # Evaluation -> Retry / END
+    # --------------------------------------------------------
+
+    workflow.add_conditional_edges(
+        "evaluation",
+        route,
+        {
+            "RETRY_REQUIRED": "router",
+            "NO_RETRY_REQUIRED": END,
+        },
+    )
+
+    # --------------------------------------------------------
+    # Image
+    # --------------------------------------------------------
+
+    workflow.add_edge(
+        "image_search",
+        END,
+    )
+
+    # --------------------------------------------------------
+    # Compile with ASYNC checkpointer
+    # --------------------------------------------------------
+
     search_agent = workflow.compile(checkpointer=checkpoint)
-    # generating and saving the graph visualization
-    graph_image = search_agent.get_graph().draw_mermaid_png()
-    with open("search_agent.png", "wb") as f:
-        f.write(graph_image)
+
+    # --------------------------------------------------------
+    # Graph visualization
+    # --------------------------------------------------------
+
+    try:
+        graph_image = search_agent.get_graph().draw_mermaid_png()
+
+        with open(
+            "search_agent.png",
+            "wb",
+        ) as f:
+            f.write(graph_image)
+
+    except Exception:
+        traceback.print_exc()
 
     return search_agent
 
 
-# rag_graph = build_rag_graph(checkpoint)
+# ============================================================
+# ASYNC CHECKPOINTER + GRAPH LIFECYCLE
+# ============================================================
 
 
-async def run_search_agent(rag_graph, query: str, thread_id: str):
-    print("============1. INSIDE run_search_agent ")
+@asynccontextmanager
+async def create_rag_graph() -> AsyncIterator:
+    """
+    Create and maintain the async Postgres checkpointer
+    for the lifetime of the application.
+
+    IMPORTANT:
+    The checkpointer must remain inside its async context
+    while the graph is being used.
+    """
+
+    print("========== INITIALIZING ASYNC POSTGRES CHECKPOINTER ==========")
+
+    async with AsyncPostgresSaver.from_conn_string(CHECKPOINT_DB_URI) as checkpoint:
+
+        print("========== RUNNING CHECKPOINTER SETUP ==========")
+
+        await checkpoint.setup()
+
+        print("========== CHECKPOINTER READY ==========")
+
+        rag_graph = build_rag_graph(checkpoint)
+
+        try:
+            yield rag_graph
+
+        finally:
+            print("========== CLOSING ASYNC CHECKPOINTER ==========")
+
+
+# ============================================================
+# RUN SEARCH AGENT
+# ============================================================
+
+
+async def run_search_agent(
+    rag_graph,
+    query: str,
+    thread_id: str,
+):
+
+    print("============1. INSIDE run_search_agent")
+
     initial_state = {
         "query": query,
-        # "messages": [],
         "retrieved_docs": [],
         "reranked_docs": [],
         "response": {},
@@ -665,31 +1116,64 @@ async def run_search_agent(rag_graph, query: str, thread_id: str):
         "is_good": False,
         "attempts": 0,
     }
-    config = {"configurable": {"thread_id": thread_id}}
 
-    final_state = await rag_graph.ainvoke(initial_state, config=config)
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    final_state = await rag_graph.ainvoke(
+        initial_state,
+        config=config,
+    )
+
     if final_state.get("route") == "IMAGE":
+
         print("FINAL STATE:")
+
         print(final_state)
 
         print("FINAL IMAGES:")
+
         print(final_state.get("images"))
-        return {"query": query, "images": final_state.get("images", [])}
 
-    state = await rag_graph.get_state(config)
+        return {
+            "query": query,
+            "images": final_state.get(
+                "images",
+                [],
+            ),
+        }
 
-    print("***************am printing my state m,essage ", state.values["messages"])
+    # Get the latest checkpoint state.
+    state = await rag_graph.aget_state(config)
 
-    return final_state["response"]
+    print(
+        "*************** " "printing state messages ",
+        state.values.get(
+            "messages",
+            [],
+        ),
+    )
+
+    return final_state.get(
+        "response",
+        {},
+    )
 
 
-# for streaming repsonse:
+# ============================================================
+# STREAMING SEARCH AGENT
+# ============================================================
+
+
 async def run_search_agent_stream(
     rag_graph,
     query: str,
     thread_id: str,
 ):
-    
+
     print("============ INSIDE run_search_agent_stream")
 
     initial_state = {
@@ -703,59 +1187,143 @@ async def run_search_agent_stream(
         "attempts": 0,
     }
 
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
 
     try:
 
         async for event in rag_graph.astream_events(
-            initial_state, config=config, version="v2"
+            initial_state,
+            config=config,
+            version="v2",
         ):
 
             kind = event.get("event")
 
-            print("EVENT:", kind)
-            print("DATA:", event.get("data"))
+            print(
+                "EVENT:",
+                kind,
+            )
 
-            print(kind)
+            node_name = event.get(
+                "metadata",
+                {},
+            ).get("langgraph_node")
 
-            # Stream LLM tokens
+            # ------------------------------------------------
+            # Stream only final answer nodes
+            # ------------------------------------------------
+
             if kind == "on_chat_model_stream":
 
-                node_name = event.get("metadata", {}).get("langgraph_node")
+                print(
+                    "STREAM NODE:",
+                    node_name,
+                )
 
-                print("STREAM NODE:", node_name)
-
-                # only stream final answer nodes
-                if node_name not in ["chat_response", "generate_answer"]:
+                if node_name not in [
+                    "chat_response",
+                    "generate_answer",
+                ]:
                     continue
 
-                chunk = event["data"]["chunk"]
+                chunk = event.get(
+                    "data",
+                    {},
+                ).get("chunk")
+
+                if chunk is None:
+                    continue
 
                 content = chunk.content
 
                 if content:
-
                     yield content
 
-        # After streaming completes,
-        # get final graph state for metadata
+        # ----------------------------------------------------
+        # Get final checkpoint state
+        # ----------------------------------------------------
 
-        final_state = await rag_graph.get_state(config)
+        final_state = await rag_graph.aget_state(config)
 
         state_values = final_state.values
 
-        # send final metadata
+        # ----------------------------------------------------
+        # Send final metadata
+        # ----------------------------------------------------
+
         yield {
             "done": True,
-            "sources": state_values.get("sources", []),
-            "images": state_values.get("images", []),
-            "policy_citations": state_values.get("policy_citations", ""),
-            "page_no": state_values.get("page_no", ""),
-            "document_name": state_values.get("document_name", ""),
+            "sources": state_values.get(
+                "sources",
+                [],
+            ),
+            "images": state_values.get(
+                "images",
+                [],
+            ),
+            "policy_citations": state_values.get(
+                "policy_citations",
+                "",
+            ),
+            "page_no": state_values.get(
+                "page_no",
+                "",
+            ),
+            "document_name": state_values.get(
+                "document_name",
+                "",
+            ),
         }
 
     except Exception as e:
+
         print("Streaming agent error:")
+
         traceback.print_exc()
 
         raise e
+
+
+# ============================================================
+# OPTIONAL HELPER FOR FASTAPI / APPLICATION LIFESPAN
+# ============================================================
+
+# _rag_graph = None
+
+
+# @asynccontextmanager
+# async def rag_lifespan():
+
+#     """
+#     Application-level lifecycle.
+
+#     Use this if you are running FastAPI, for example:
+
+#         @asynccontextmanager
+#         async def lifespan(app):
+#             async with rag_lifespan() as rag_graph:
+#                 app.state.rag_graph = rag_graph
+#                 yield
+#     """
+
+#     global _rag_graph
+
+#     async with create_rag_graph() as rag_graph:
+
+#         _rag_graph = rag_graph
+
+#         print(
+#             "========== RAG GRAPH READY =========="
+#         )
+
+#         yield rag_graph
+
+#     _rag_graph = None
+
+#     print(
+#         "========== RAG GRAPH SHUTDOWN =========="
+#     )

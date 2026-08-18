@@ -1,42 +1,31 @@
-from fastapi import FastAPI
-from src.api.v1.routes import query
-from src.api.v1.routes.upload_routes import router as upload_router
-from src.api.v1.agents.agents import build_rag_graph
-
 from contextlib import asynccontextmanager
 
-app = FastAPI()
+from fastapi import FastAPI
+
+from src.api.v1.routes.query import router
+from src.api.v1.agents.agents import create_rag_graph
 
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    print("========== STARTING APPLICATION ==========")
+
+    async with create_rag_graph() as rag_graph:
+
+        # Store the graph on FastAPI application state
+        app.state.rag_graph = rag_graph
+
+        print("========== RAG GRAPH READY ==========")
+
+        yield
+
+    print("========== APPLICATION SHUTDOWN ==========")
 
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+app = FastAPI(
+    title="Agentic RAG API",
+    lifespan=lifespan,
+)
 
-
-app.include_router(query.router)
-
-
-# Upload routes
-app.include_router(upload_router)
-
-
-from src.core.checkpoint import init_checkpoint, close_checkpoint
-
-
-@app.on_event("startup")
-async def startup():
-
-    checkpoint = await init_checkpoint()
-
-    app.state.rag_graph = build_rag_graph(checkpoint)
-
-
-@app.on_event("shutdown")
-async def shutdown():
-
-    await close_checkpoint()
+app.include_router(router)

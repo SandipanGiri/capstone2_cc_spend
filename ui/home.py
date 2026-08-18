@@ -18,7 +18,7 @@ load_styles()
 
 BACKEND_URL = "http://localhost:8000/api/v1/query/stream"
 # UPLOAD_URL = "http://localhost:8000/api/v1/upload"
-UPLOAD_URL = "http://localhost:8000/api/v1/upload"
+UPLOAD_URL = "http://localhost:8000/api/v1/documents"
 
 
 st.markdown(
@@ -144,7 +144,6 @@ if prompt:
         unsafe_allow_html=True,
     )
 
-   
     placeholder = st.empty()
 
     full_response = ""
