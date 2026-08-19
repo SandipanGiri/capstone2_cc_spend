@@ -15,8 +15,7 @@ _TEXT_CHUNK_OVERLAP = 300
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Split a long string into overlapping character windows.
-    """
+    """Split a long string into overlapping character windows."""
     chunks: list[str] = []
     start = 0
     step = chunk_size - overlap
@@ -35,9 +34,7 @@ def file_check(file_path):
 
     print("Source path for checking:", source_path)
 
-    vector_store = get_vector_store(
-        collection_name="multimodal_chunks"
-    )
+    vector_store = get_vector_store(collection_name="multimodal_chunks")
 
     with vector_store._engine.connect() as conn:
 
@@ -53,7 +50,7 @@ def file_check(file_path):
                     ) = :source
                 )
             """),
-            {"source": source_path}
+            {"source": source_path},
         )
 
         existing = result.scalar()
@@ -70,10 +67,10 @@ def run_ingestion(file_path: str) -> dict:
         Dict with "status", "doc_id", and "chunks_ingested" count.
     """
     print("Ingestion Started")
-    existing=file_check(file_path)
-   
+    existing = file_check(file_path)
+
     if existing:
-        message= f"{Path(file_path).name} already exists. Skipping ingestion."
+        message = f"{Path(file_path).name} already exists. Skipping ingestion."
         print("*****", message)
         return {
             "status": "unsuccessful",
@@ -81,7 +78,7 @@ def run_ingestion(file_path: str) -> dict:
         }
 
     else:
-        # 1 multimodla ingetsion 
+        # 1 multimodla ingetsion
         resolved = pathlib.Path(file_path).resolve()
 
         doc_id = upsert_document(resolved.name, str(resolved))
@@ -93,14 +90,21 @@ def run_ingestion(file_path: str) -> dict:
 
         chunks: list[dict] = []
         for elem in parsed_elements:
-            if elem["content_type"] == "text" and len(elem["content"]) > _TEXT_CHUNK_SIZE:
-                for sub in _split_text(elem["content"], _TEXT_CHUNK_SIZE, _TEXT_CHUNK_OVERLAP):
+            if (
+                elem["content_type"] == "text"
+                and len(elem["content"]) > _TEXT_CHUNK_SIZE
+            ):
+                for sub in _split_text(
+                    elem["content"], _TEXT_CHUNK_SIZE, _TEXT_CHUNK_OVERLAP
+                ):
                     # Each sub-chunk inherits the parent element's full metadata
-                    chunks.append({
-                        "content": sub,
-                        "content_type": elem["content_type"],
-                        "metadata": elem["metadata"],
-                    })
+                    chunks.append(
+                        {
+                            "content": sub,
+                            "content_type": elem["content_type"],
+                            "metadata": elem["metadata"],
+                        }
+                    )
             else:
                 chunks.append(elem)
 
@@ -109,31 +113,36 @@ def run_ingestion(file_path: str) -> dict:
         count = store_chunks(chunks, doc_id)
         print(f"[ingestion] Stored {count} chunks → multimodal_chunks")
 
-        # 2. Rerank ingestion
-        # --------------------------------------------------
-        print("[ingestion] Starting rerank ingestion...")
+        # # 2. Rerank ingestion
+        # # --------------------------------------------------
+        # print("[ingestion] Starting rerank ingestion...")
 
-        ingest_file(file_path)
+        # ingest_file(file_path)
 
-        print("[ingestion] Rerank ingestion completed successfully")
+        # print("[ingestion] Rerank ingestion completed successfully")
 
         # --------------------------------------------------
         # 3. Everything succeeded
         # --------------------------------------------------
-     
-        return {"status": "success","message": "File ingested successfully", "doc_id": doc_id, "chunks_ingested": count}
+
+        return {
+            "status": "success",
+            "message": "File ingested successfully",
+            "doc_id": doc_id,
+            "chunks_ingested": count,
+        }
 
 
-# if __name__ == "__main__":
-#     import sys
+if __name__ == "__main__":
+    import sys
 
-#     if len(sys.argv) >= 2:
-#         file_path = pathlib.Path(sys.argv[1])
-#     else:
-#         file_path = pathlib.Path("data/KB_Credit_Card_Spend_Summarizer.docx")
+    if len(sys.argv) >= 2:
+        file_path = pathlib.Path(sys.argv[1])
+    else:
+        file_path = pathlib.Path("data/KB_Credit_Card_Spend_Summarizer.docx")
 
-#     if not file_path.exists():
-#         raise FileNotFoundError(f"word file was not found at: {file_path.resolve()}")
+    if not file_path.exists():
+        raise FileNotFoundError(f"word file was not found at: {file_path.resolve()}")
 
-#     result = run_ingestion(str(file_path))
-#     print(f"\nIngestion complete: {result}")
+    result = run_ingestion(str(file_path))
+    print(f"\nIngestion complete: {result}")

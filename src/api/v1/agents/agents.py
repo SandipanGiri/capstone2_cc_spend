@@ -57,6 +57,11 @@ def intent_check_node(state: RAGState):
 
     structured_llm = llm.with_structured_output(IntentDecision)
 
+    # Get conversation history
+    conversation_history = "\n".join(
+        [f"{msg.type}: {msg.content}" for msg in state.get("messages", [])]
+    )
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -128,11 +133,13 @@ def intent_check_node(state: RAGState):
         ]
     )
 
-    result = (prompt | structured_llm).invoke({"query": state["query"]})
+    result = (prompt | structured_llm).invoke(
+        {"history": conversation_history, "query": state["query"]}
+    )
 
     print(f"[intent_check_node] Intent: {result.intent}, Reason: {result.reason}")
 
-    return {**state, "intent": result.intent}
+    return {"intent": result.intent}
 
 
 def chat_response_node(state: RAGState):
@@ -147,12 +154,13 @@ def chat_response_node(state: RAGState):
                 "system",
                 """
                 You are a friendly credit card assistant.
-                If a question is outside the scope of credit card assistance politely
-                reject and  state that you can only assist with credit card informations 
-                provdided in context or documents.
 
-                Reply briefly and politely.
-
+                Rules:
+                - Reply briefly and politely.
+                - Maintain conversation context.
+                - Do not repeat greetings every time.
+                - If the question is outside credit card assistance,
+                  politely say you can only help with credit card information.
 
                 Examples:
 
@@ -166,11 +174,28 @@ def chat_response_node(state: RAGState):
                 Assistant: You're welcome!
                 """,
             ),
-            ("human", "{query}"),
+            (
+                "human",
+                """
+                Conversation history:
+
+                {history}
+
+
+                Latest user message:
+
+                {query}
+                """,
+            ),
         ]
     )
 
-    result = (prompt | llm).invoke({"query": state["query"]})
+    # Build previous conversation
+    history = "\n".join(
+        [f"{msg.type}: {msg.content}" for msg in state.get("messages", [])]
+    )
+
+    result = (prompt | llm).invoke({"history": history, "query": state["query"]})
 
     response = {
         "answer": result.content,
@@ -180,9 +205,9 @@ def chat_response_node(state: RAGState):
     }
 
     return {
-        **state,
         "answer": result.content,
-        "response": response,
+        # "response": response,
+        # append AI message to checkpoint memory
         "messages": [AIMessage(content=result.content)],
     }
 
@@ -416,15 +441,22 @@ def nl2sql_node(state: RAGState) -> RAGState:
     )
     print("[nl2sql_node] Answer generated.")
     response = answer.model_dump()
+    print("************response in nl2sql********", response)
     response["policy_citations"] = "N/A"
     response["sql_query_executed"] = generated_sql
     # return the sql query is RAGState
     # and also the output in sql_result of RAGState
+    # return {
+    #     **state,
+    #     "generated_sql": generated_sql,
+    #     "sql_result": str(sql_result),
+    #     "response": response,
+    # }
     return {
-        **state,
-        "generated_sql": generated_sql,
-        "sql_result": str(sql_result),
+        "answer": answer.answer,
         "response": response,
+        "sql_result": str(sql_result),
+        "generated_sql": generated_sql,
     }
 
 
@@ -689,7 +721,7 @@ async def run_search_agent_stream(
     query: str,
     thread_id: str,
 ):
-    
+
     print("============ INSIDE run_search_agent_stream")
 
     initial_state = {
@@ -732,15 +764,14 @@ async def run_search_agent_stream(
                 chunk = event["data"]["chunk"]
 
                 content = chunk.content
-
                 if content:
 
-                    yield content
+                    yield json.dumps({"content": content}) + "\n"
 
         # After streaming completes,
         # get final graph state for metadata
 
-        final_state = await rag_graph.get_state(config)
+        final_state = await rag_graph.aget_state(config)
 
         state_values = final_state.values
 
