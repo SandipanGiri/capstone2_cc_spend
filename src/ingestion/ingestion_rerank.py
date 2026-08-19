@@ -44,7 +44,7 @@ def index_add():
 
 def ingest_file(file_path):
     docs, ext = load_document(file_path)
-    print("docs",docs)
+    print("docs", docs)
     print("Pages: " + str(len(docs)))
 
     for doc in docs:
@@ -70,6 +70,6 @@ def ingest_file(file_path):
     print("==== Ingestion completed ====")
 
 
-# if __name__ == "__main__":
-#     # ingest_pdf("data/HR_Knowledge_Base_2025.pdf")
-#     ingest_file("data/KB_Credit_Card_Spend_Summarizer.docx")
+if __name__ == "__main__":
+    # ingest_pdf("data/HR_Knowledge_Base_2025.pdf")
+    ingest_file("data/KB_Credit_Card_Spend_Summarizer.docx")

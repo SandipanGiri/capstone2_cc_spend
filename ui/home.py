@@ -144,7 +144,6 @@ if prompt:
         unsafe_allow_html=True,
     )
 
-   
     placeholder = st.empty()
 
     full_response = ""
@@ -174,12 +173,11 @@ if prompt:
 
                 line = chunk.decode("utf-8")
 
-                # SSE data line
                 if line.startswith("data:"):
 
                     payload = json.loads(line.replace("data:", "").strip())
 
-                    # answer token
+                    # streaming token response
                     if "content" in payload:
 
                         full_response += payload["content"]
@@ -193,14 +191,52 @@ if prompt:
                             unsafe_allow_html=True,
                         )
 
-                    # citations + images
-                    if "sources" in payload:
+                    # final response from backend
+                    elif payload.get("done"):
 
-                        sources = payload["sources"]
+                        full_response = payload.get("answer", "")
 
-                    if "images" in payload:
+                        sources = payload.get("sources", [])
 
-                        images = payload["images"]
+                        images = payload.get("images", [])
+
+                        placeholder.markdown(
+                            f"""
+                            <div class="assistant-msg">
+                                {full_response}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+            # Final structured response
+            if payload.get("done"):
+
+                if payload.get("answer"):
+
+                    full_response = payload["answer"]
+
+                sources = payload.get("sources", [])
+
+                images = payload.get("images", [])
+
+                placeholder.markdown(
+                    f"""
+                    <div class="assistant-msg">
+                        {full_response}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            # citations + images
+            if "sources" in payload:
+
+                sources = payload["sources"]
+
+            if "images" in payload:
+
+                images = payload["images"]
 
             # final answer
             placeholder.markdown(

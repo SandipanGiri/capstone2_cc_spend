@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, HTTPException, Request
 from src.api.v1.schemas.query_schema import QueryRequest, QueryResponse
 from src.api.v1.services.query_service import query_documents, query_documents_stream
@@ -46,6 +45,12 @@ async def query_endpoint(request: Request, body: QueryRequest) -> QueryResponse:
     if response is None:
 
         raise HTTPException(status_code=500, detail="Agent returned empty response")
+
+    if not isinstance(response, dict):
+
+        raise HTTPException(
+            status_code=500, detail="Invalid response format from agent"
+        )
 
     images = []
 
@@ -125,7 +130,9 @@ async def stream_query_endpoint(request: Request, body: QueryRequest):
                     if chunk.get("done"):
 
                         metadata = {
+                            "done": True,
                             "sources": chunk.get("sources", []),
+                            "answer": chunk.get("answer", ""),
                             "images": chunk.get("images", []),
                             "policy_citations": chunk.get("policy_citations", ""),
                             "page_no": chunk.get("page_no", ""),
